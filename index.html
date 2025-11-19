@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./assets/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vemaybaynhauyen.com - Tìm kiếm chuyến bay</title>
+    
+    <link rel="manifest" href="./manifest.json" />
+    <meta name="theme-color" content="#ffffff">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root {
+        --bg-color: #f3f4f6;
+        --text-color: #1f2937;
+        --card-bg-color: #ffffff;
+        --border-color: #e5e7eb;
+      }
+
+      .dark {
+         --bg-color: #111827;
+        --text-color: #f9fafb;
+        --card-bg-color: #1f2937;
+        --border-color: #374151;
+      }
+      
+      body {
+        background-color: var(--bg-color);
+        color: var(--text-color);
+        transition: background-color 0.3s, color 0.3s;
+      }
+
+      @media print {
+        body * {
+          visibility: hidden;
+        }
+        .ticket-to-print, .ticket-to-print * {
+          visibility: visible;
+        }
+        .ticket-to-print {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100%;
+        }
+        .no-print {
+            display: none !important;
+        }
+        /* Handle modal container for printing */
+        .ticket-modal-container {
+            visibility: visible !important;
+            position: static !important;
+            background-color: transparent !important;
+        }
+        .ticket-modal-container > div, .ticket-modal-content {
+            visibility: visible !important;
+            overflow: visible !important;
+            height: auto !important;
+            max-height: none !important;
+            box-shadow: none !important;
+        }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.0",
+    "http": "https://aistudiocdn.com/http@^0.0.1-security",
+    "https": "https://aistudiocdn.com/https@^1.0.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
