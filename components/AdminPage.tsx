@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AdminFeeConfig, BookingData, FeeConfig, User, Admin } from '../types';
 import * as adminService from '../services/adminService';
 import * as authService from '../services/authService';
 import * as emailService from '../services/emailService';
 import ETicket from './ETicket';
 import ChangeCredentialsModal from './ChangeCredentialsModal';
-import { CloseIcon, InfoIcon, DownloadIcon, TrashIcon, EditIcon, CheckCircleIcon, UserGroupIcon, PlusIcon, CreditCardIcon, ArrowLeftIcon, MailIcon } from './icons/Icons';
+import { CloseIcon, InfoIcon, DownloadIcon, TrashIcon, EditIcon, CheckCircleIcon, UserGroupIcon, PlusIcon, CreditCardIcon, ArrowLeftIcon, MailIcon, ChevronLeftIcon, ChevronRightIcon } from './icons/Icons';
 import { AIRPORTS } from '../constants';
 import { PROXY_URL, BACKUP_API_URL } from '../services/apiConfig';
 
@@ -214,11 +214,9 @@ const PaymentProcessingModal: React.FC<{ booking: BookingData; onClose: () => vo
             // Fallback calculation if total_amount is missing (for old bookings) and data is safe
             if (finalAmount === 0 && booking.flight && !Array.isArray(booking.flight)) {
                  const paxCount = (Array.isArray(booking.passengers) && booking.passengers.length > 0) ? booking.passengers.length : 1;
-                 // Rough estimate: Price + 15% tax/fees
                  const price = booking.flight.price_net || 0; 
-                 finalAmount = price * paxCount * 1.15; 
+                 finalAmount = price * paxCount * 1.15; // Rough estimate
                  
-                 // Add ancillary if possible
                  if (booking.ancillaries?.outboundBaggage) finalAmount += (booking.ancillaries.outboundBaggage.price || 0);
                  if (booking.ancillaries?.inboundBaggage) finalAmount += (booking.ancillaries.inboundBaggage.price || 0);
             }
@@ -231,20 +229,12 @@ const PaymentProcessingModal: React.FC<{ booking: BookingData; onClose: () => vo
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
-        const paymentInfo = {
-            method,
-            transaction_id: txnId,
-            date: new Date().toISOString()
-        };
+        const paymentInfo = { method, transaction_id: txnId, date: new Date().toISOString() };
         
-        // 1. Process Payment Logic (Backend update payment_status)
         const result = await adminService.processPayment(booking.id, amount, paymentInfo);
         
         if (result.success) {
-             // 2. IMPORTANT: Update GLOBAL Status to 'paid' so ticket turns green
              await adminService.updateBookingStatus(booking.id, 'paid', 'Thanh toán hoàn tất qua Admin');
-
-             // 3. Send Email with 'paid' status
              const updatedBooking: BookingData = { ...booking, status: 'paid', payment_status: 'paid', payment_info: paymentInfo };
              await emailService.sendConfirmationEmail(updatedBooking);
              
@@ -270,9 +260,9 @@ const PaymentProcessingModal: React.FC<{ booking: BookingData; onClose: () => vo
                     <div>
                         <label className="block text-sm font-medium mb-1">Phương thức</label>
                         <select value={method} onChange={e => setMethod(e.target.value)} className="w-full p-2 border rounded bg-transparent">
-                            <option value="transfer">Chuyển khoản ngân hàng</option>
+                            <option value="transfer">Chuyển khoản</option>
                             <option value="cash">Tiền mặt</option>
-                            <option value="gateway">Cổng thanh toán (VNPay/Momo)</option>
+                            <option value="gateway">Cổng thanh toán</option>
                         </select>
                     </div>
                     <div>
@@ -302,8 +292,8 @@ const EditUserModal: React.FC<{ user: User; onClose: () => void; onSave: () => v
     useEffect(() => {
         // Map gender from DB (Male/Female/Other) to Form (Mr/Mrs)
         let genderVal = 'Mr';
-        const g = user.gender ? user.gender : ''; 
-        if (g === 'Female' || g === 'Mrs' || g === 'Miss' || g === 'Nữ' || g === 'Nu') {
+        const g = user.gender ? String(user.gender).toLowerCase() : ''; 
+        if (g === 'female' || g === 'mrs' || g === 'miss' || g === 'nữ' || g === 'nu') {
             genderVal = 'Mrs';
         }
         
@@ -315,6 +305,7 @@ const EditUserModal: React.FC<{ user: User; onClose: () => void; onSave: () => v
             address: user.address || '',
             nationality: user.nationality || ''
         });
+        setPointsDelta(0);
     }, [user]);
 
     const handleChange = (field: keyof User, value: string) => {
@@ -487,6 +478,180 @@ const ResetPasswordModal: React.FC<{ userId: number | string; type: 'user' | 'ad
     );
 };
 
+// FIX: Define BookingsManager component
+// Helper to get airport city name from code
+const getCityName = (code: string) => {
+    const airport = AIRPORTS.find(a => a.id === code);
+    if (!airport) return code;
+    // Extract city name before parenthesis
+    const match = airport.name.match(/(.*?)\s*\(/);
+    return match ? match[1].trim() : airport.name;
+};
+
+// --- BookingsManager Component ---
+interface BookingsManagerProps {
+    allBookings: BookingData[];
+    fetchData: () => void;
+    onSelectBooking: (booking: BookingData) => void;
+    onProcessPayment: (booking: BookingData) => void;
+    onResendEmail: (booking: BookingData) => void;
+    onCancelBooking: (bookingId: string) => void;
+    onDeleteBooking: (bookingId: string) => void;
+    onUpdateStatus: (bookingId: string, newStatus: string) => void;
+    sendingEmailId: string | null;
+    isUpdatingStatus: string | null;
+}
+
+const BookingsManager: React.FC<BookingsManagerProps> = (props) => {
+    const { 
+        allBookings, 
+        onSelectBooking,
+        onProcessPayment,
+        onResendEmail,
+        onCancelBooking,
+        onDeleteBooking,
+        onUpdateStatus,
+        sendingEmailId,
+        isUpdatingStatus
+    } = props;
+
+    const [filter, setFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [currentPage, setCurrentPage] = useState(1);
+    const bookingsPerPage = 15;
+
+    const filteredBookings = useMemo(() => {
+        return allBookings
+            .filter(b => {
+                if (statusFilter !== 'all' && b.status !== statusFilter) return false;
+                if (!filter) return true;
+                const lowerFilter = filter.toLowerCase();
+                return (
+                    b.pnr?.toLowerCase().includes(lowerFilter) ||
+                    b.id?.toLowerCase().includes(lowerFilter) ||
+                    b.contact?.fullName?.toLowerCase().includes(lowerFilter) ||
+                    b.contact?.email?.toLowerCase().includes(lowerFilter) ||
+                    b.contact?.phone?.toLowerCase().includes(lowerFilter)
+                );
+            })
+            .sort((a, b) => new Date(b.bookingTimestamp).getTime() - new Date(a.bookingTimestamp).getTime());
+    }, [allBookings, filter, statusFilter]);
+
+    const totalPages = Math.ceil(filteredBookings.length / bookingsPerPage);
+    const currentBookings = filteredBookings.slice((currentPage - 1) * bookingsPerPage, currentPage * bookingsPerPage);
+
+    const getStatusBadge = (status?: string) => {
+        switch (status) {
+            case 'paid': return <span className="text-xs font-medium px-2.5 py-0.5 rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">Đã thanh toán</span>;
+            case 'cancelled': return <span className="text-xs font-medium px-2.5 py-0.5 rounded bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300">Đã hủy</span>;
+            default: return <span className="text-xs font-medium px-2.5 py-0.5 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300">Chờ thanh toán</span>;
+        }
+    };
+    
+    return (
+        <div>
+            <h2 className="text-xl font-bold mb-4">Danh sách Đơn hàng ({filteredBookings.length})</h2>
+            
+            {/* Filters */}
+            <div className="flex flex-wrap gap-4 mb-4">
+                <input
+                    type="text"
+                    placeholder="Tìm theo PNR, Tên, SĐT, Email..."
+                    value={filter}
+                    onChange={e => setFilter(e.target.value)}
+                    className="flex-grow p-2 border rounded bg-transparent"
+                />
+                <select
+                    value={statusFilter}
+                    onChange={e => setStatusFilter(e.target.value)}
+                    className="p-2 border rounded bg-transparent"
+                >
+                    <option value="all">Tất cả trạng thái</option>
+                    <option value="pending">Chờ thanh toán</option>
+                    <option value="paid">Đã thanh toán</option>
+                    <option value="cancelled">Đã hủy</option>
+                </select>
+            </div>
+
+            {/* Bookings Table */}
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-100 dark:bg-gray-700">
+                        <tr>
+                            <th className="p-3">PNR / Mã ĐH</th>
+                            <th className="p-3">Hành khách</th>
+                            <th className="p-3">Hành trình</th>
+                            <th className="p-3">Tổng tiền</th>
+                            <th className="p-3">Trạng thái</th>
+                            <th className="p-3">Thao tác</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                         {currentBookings.length > 0 ? currentBookings.map(b => (
+                           <tr key={b.id} className="border-b dark:border-gray-700">
+                                <td className="p-3">
+                                    <button onClick={() => onSelectBooking(b)} className="font-bold text-red-600 hover:underline">{b.pnr}</button>
+                                    <div className="text-xs text-gray-500">{b.id}</div>
+                                </td>
+                                <td className="p-3">
+                                    <div>{b.contact.fullName}</div>
+                                    <div className="text-xs text-gray-500">{b.contact.email}</div>
+                                </td>
+                                <td className="p-3">
+                                     {b.flight.flights.length > 0 ?
+                                        `${getCityName(b.flight.flights[0].departure_airport.id)} → ${getCityName(b.flight.flights[b.flight.flights.length - 1].arrival_airport.id)}`
+                                        : 'N/A'
+                                     }
+                                     <div className="text-xs text-gray-500">{new Date(b.bookingTimestamp).toLocaleString('vi-VN')}</div>
+                                </td>
+                                <td className="p-3 font-semibold">{new Intl.NumberFormat('vi-VN').format(b.total_amount || 0)}đ</td>
+                                <td className="p-3">{getStatusBadge(b.status)}</td>
+                                <td className="p-3">
+                                    <div className="flex gap-2 items-center flex-wrap">
+                                        <button onClick={() => onProcessPayment(b)} disabled={b.status === 'paid'} className="text-green-600 hover:text-green-800 disabled:opacity-30 disabled:cursor-not-allowed" title="Thanh toán">
+                                            <CreditCardIcon className="w-5 h-5" />
+                                        </button>
+                                         <button onClick={() => onResendEmail(b)} disabled={sendingEmailId === b.id} className="text-blue-600 hover:text-blue-800 disabled:opacity-30" title="Gửi lại email">
+                                            {sendingEmailId === b.id ? <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div> : <MailIcon className="w-5 h-5"/>}
+                                        </button>
+                                        <select 
+                                            value={b.status || 'pending'}
+                                            onChange={(e) => onUpdateStatus(b.id, e.target.value)}
+                                            disabled={isUpdatingStatus === b.id}
+                                            className="text-xs p-1 border rounded bg-transparent"
+                                        >
+                                            <option value="pending">Chờ TT</option>
+                                            <option value="paid">Đã TT</option>
+                                            <option value="cancelled">Hủy</option>
+                                        </select>
+                                        <button onClick={() => onCancelBooking(b.id)} className="text-orange-600 hover:text-orange-800" title="Hủy vé (ghi lý do)">
+                                            <CloseIcon className="w-5 h-5" />
+                                        </button>
+                                        <button onClick={() => onDeleteBooking(b.id)} className="text-red-600 hover:text-red-800" title="Xóa">
+                                            <TrashIcon className="w-5 h-5" />
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        )) : (
+                            <tr><td colSpan={6} className="text-center p-4">Không có đơn hàng nào.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+                <div className="flex justify-center items-center gap-2 mt-4">
+                    <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 disabled:opacity-50"><ChevronLeftIcon /></button>
+                    <span>Trang {currentPage} / {totalPages}</span>
+                    <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-2 disabled:opacity-50"><ChevronRightIcon /></button>
+                </div>
+            )}
+        </div>
+    );
+};
+
 // --- Main Dashboard Component ---
 const AdminDashboard: React.FC<{ onLogout: () => void, onExitAdmin: () => void }> = ({ onLogout, onExitAdmin }) => {
     const [activeTab, setActiveTab] = useState<'bookings' | 'fees' | 'users' | 'admins'>('bookings');
@@ -559,22 +724,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void, onExitAdmin: () => void }
         } finally {
             setIsDownloading(false);
         }
-    };
-
-    const getAirportNameById = (id: string) => {
-        const airport = AIRPORTS.find(a => a.id === id);
-        return airport ? airport.name : id;
-    };
-
-    const getItinerary = (booking: BookingData): string => {
-        const allLegs = booking.flight?.flights;
-        if (!allLegs || !Array.isArray(allLegs) || allLegs.length === 0) return 'Dữ liệu không đầy đủ';
-        const firstLeg = allLegs[0];
-        const lastLeg = allLegs[allLegs.length - 1];
-        if (!firstLeg?.departure_airport?.id || !lastLeg?.arrival_airport?.id) return 'Dữ liệu không đầy đủ';
-        const departureName = getAirportNameById(firstLeg.departure_airport.id);
-        const arrivalName = getAirportNameById(lastLeg.arrival_airport.id);
-        return `${departureName} → ${arrivalName}`;
     };
 
     const handleDeleteUser = async (userId: string | number) => {
@@ -676,14 +825,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void, onExitAdmin: () => void }
         }
     }
 
-    const getStatusBadge = (status?: string) => {
-        switch(status) {
-            case 'paid': return <span className="bg-green-100 text-green-800 text-xs font-bold px-2.5 py-0.5 rounded border border-green-400">Đã thanh toán</span>;
-            case 'cancelled': return <span className="bg-red-100 text-red-800 text-xs font-bold px-2.5 py-0.5 rounded border border-red-400">Đã hủy</span>;
-            default: return <span className="bg-yellow-100 text-yellow-800 text-xs font-bold px-2.5 py-0.5 rounded border border-yellow-400">Chờ thanh toán</span>;
-        }
-    }
-
     return (
         <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200">
             {editingUser && (
@@ -743,87 +884,18 @@ const AdminDashboard: React.FC<{ onLogout: () => void, onExitAdmin: () => void }
                    {isLoading ? <p>Đang tải dữ liệu...</p> : (
                        <>
                         {activeTab === 'bookings' && (
-                            <div>
-                               <h2 className="text-xl font-bold mb-4">Danh sách Đặt vé ({bookings.length})</h2>
-                               <div className="overflow-x-auto">
-                                   <table className="w-full text-sm text-left border-collapse">
-                                       <thead className="bg-gray-100 dark:bg-gray-700">
-                                           <tr>
-                                               <th className="p-3 border-b">Mã ĐH / PNR</th>
-                                               <th className="p-3 border-b">Khách hàng</th>
-                                               <th className="p-3 border-b">Hành trình</th>
-                                               <th className="p-3 border-b">Ngày đặt</th>
-                                               <th className="p-3 border-b">Trạng thái</th>
-                                               <th className="p-3 border-b">Thanh toán</th>
-                                               <th className="p-3 border-b">Thao tác</th>
-                                           </tr>
-                                       </thead>
-                                       <tbody>
-                                           {bookings.length > 0 ? bookings.map(b => (
-                                               <tr key={b.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
-                                                   <td className="p-3 font-mono">
-                                                       <div className="text-red-600 font-bold">{b.id}</div>
-                                                       <div className="text-gray-500 font-bold">{b.pnr}</div>
-                                                   </td>
-                                                   <td className="p-3">
-                                                       <div className="font-semibold">{b.contact?.fullName || 'N/A'}</div>
-                                                       <div className="text-xs text-gray-500">{b.contact?.phone}</div>
-                                                   </td>
-                                                   <td className="p-3 text-xs">{getItinerary(b)}</td>
-                                                   <td className="p-3 text-xs">{new Date(b.bookingTimestamp).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
-                                                   <td className="p-3">{getStatusBadge(b.status)}</td>
-                                                   <td className="p-3">
-                                                       {b.payment_status === 'paid' ? (
-                                                            <div className="text-xs text-green-600">
-                                                                <p className="font-bold">Đã thanh toán</p>
-                                                                <p>{b.payment_info?.method || ''}</p>
-                                                            </div>
-                                                       ) : b.status !== 'cancelled' ? (
-                                                           <button onClick={() => setPaymentBooking(b)} className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 flex items-center whitespace-nowrap">
-                                                               <CreditCardIcon className="w-3 h-3 mr-1"/> Thu tiền
-                                                           </button>
-                                                       ) : <span className="text-xs text-gray-400">-</span>}
-                                                   </td>
-                                                   <td className="p-3">
-                                                        <div className="flex flex-col gap-2">
-                                                            <button onClick={() => setSelectedBooking(b)} className="text-blue-600 hover:underline text-left text-xs font-semibold">Xem vé</button>
-                                                            
-                                                            {b.status !== 'cancelled' && (
-                                                                <button onClick={() => handleCancelBooking(b.id)} className="text-red-600 hover:underline text-left text-xs font-semibold">Hủy vé</button>
-                                                            )}
-
-                                                            <div className="flex items-center gap-1">
-                                                                {isUpdatingStatus === b.id ? (
-                                                                    <span className="text-xs text-blue-600 animate-pulse">Xử lý...</span>
-                                                                ) : (
-                                                                    <select 
-                                                                        className={`border border-gray-300 text-gray-900 text-xs rounded focus:ring-blue-500 focus:border-blue-500 p-1 cursor-pointer w-24 ${b.status === 'paid' ? 'bg-green-50' : 'bg-white'}`}
-                                                                        value={b.status || 'pending'}
-                                                                        onChange={(e) => handleUpdateStatus(b.id, e.target.value)}
-                                                                    >
-                                                                        <option value="pending">Chờ TT</option>
-                                                                        <option value="paid">Đã TT</option>
-                                                                        <option value="cancelled">Hủy</option>
-                                                                    </select>
-                                                                )}
-                                                            </div>
-                                                            
-                                                            <div className="flex gap-2 mt-1">
-                                                                <button onClick={() => handleResendEmail(b)} className="text-gray-500 hover:text-blue-600" title="Gửi lại Email">
-                                                                    <MailIcon className={`w-4 h-4 ${sendingEmailId === b.id ? 'animate-spin' : ''}`} />
-                                                                </button>
-                                                                <button onClick={() => handleDeleteBooking(b.id)} className="text-gray-500 hover:text-red-600" title="Xóa">
-                                                                    <TrashIcon className="w-4 h-4" />
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                   </td>
-                                               </tr>
-                                           )) : <tr><td colSpan={7} className="text-center p-4">Chưa có đơn hàng nào.</td></tr>}
-                                       </tbody>
-                                   </table>
-                               </div>
-                            </div>
+                            <BookingsManager 
+                                allBookings={bookings} 
+                                fetchData={fetchData}
+                                onSelectBooking={setSelectedBooking}
+                                onProcessPayment={setPaymentBooking}
+                                onResendEmail={handleResendEmail}
+                                onCancelBooking={handleCancelBooking}
+                                onDeleteBooking={handleDeleteBooking}
+                                onUpdateStatus={handleUpdateStatus}
+                                sendingEmailId={sendingEmailId}
+                                isUpdatingStatus={isUpdatingStatus}
+                            />
                         )}
                         {activeTab === 'users' && (
                              <div>

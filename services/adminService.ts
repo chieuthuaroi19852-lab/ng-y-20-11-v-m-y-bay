@@ -186,6 +186,10 @@ export const getAllBookings = async (): Promise<BookingData[]> => {
                 if (typeof val === 'string') {
                     try { 
                         const parsed = JSON.parse(val);
+                        // Handle case where PHP json_encode([]) results in an empty array `[]` for an object
+                        if (Array.isArray(parsed) && Object.keys(parsed).length === 0) {
+                            return defaultVal;
+                        }
                         return parsed || defaultVal;
                     } catch { 
                         return defaultVal; 

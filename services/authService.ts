@@ -132,7 +132,15 @@ const safeParseBooking = (b: any): BookingData => {
     const safeParse = (val: any, defaultVal: any) => {
         if (val === null || val === undefined) return defaultVal;
         if (typeof val === 'string') {
-            try { return JSON.parse(val) || defaultVal; } catch { return defaultVal; }
+            try { 
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed) && Object.keys(parsed).length === 0) {
+                    return defaultVal;
+                }
+                return parsed || defaultVal; 
+            } catch { 
+                return defaultVal; 
+            }
         }
         return val;
     };
