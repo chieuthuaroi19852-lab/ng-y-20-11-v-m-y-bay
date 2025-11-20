@@ -1,5 +1,5 @@
 <?php
-// guimail.php - Phiên bản hỗ trợ cập nhật trạng thái Đã thanh toán / Hủy
+// guimail.php - Phiên bản Email Vé Điện Tử Full HTML/CSS Table Layout
 require __DIR__ . '/vendor/autoload.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
@@ -47,12 +47,10 @@ if (!is_array($payload) || !isset($payload['contact'])) {
 }
 
 try {
-    // Gửi cho khách và admin
     sendCustomerConfirmation($payload);
-    
-    // Chỉ gửi admin notification nếu đây là booking mới (pending) hoặc trạng thái thay đổi quan trọng
-    // Ở đây gửi luôn để admin lưu vết
-    sendAdminNotification($payload);
+    if (arr_get($payload, 'status') === 'pending') {
+        sendAdminNotification($payload);
+    }
 
     echo json_encode(['success' => true, 'message' => 'Email đã được gửi.']);
 } catch (Exception $e) {
@@ -62,143 +60,125 @@ try {
 }
 
 // --- HELPER FUNCTIONS ---
-
-function formatCurrency($amount) {
-    return number_format((float)$amount, 0, ',', '.') . ' VND';
-}
-
-function formatDateTime($dateString, $format = 'H:i d/m/Y') {
-    try { return (new DateTime($dateString))->format($format); } catch(Exception $e) { return 'N/A'; }
-}
-
+function formatDateTime($dateString, $format = 'H:i d/m/Y') { try { return (new DateTime($dateString))->format($format); } catch(Exception $e) { return 'N/A'; } }
 function getPaymentDeadlinePHP($departureTimeStr, $bookingTimeStr) {
     try {
         $bookingTime = new DateTime($bookingTimeStr ?? 'now');
         $departureTime = new DateTime($departureTimeStr ?? $bookingTime->format('Y-m-d H:i:s'));
         $interval = $bookingTime->diff($departureTime);
         $hours = ($interval->days * 24) + $interval->h;
-        
         $deadline = clone $bookingTime;
         if ($hours > 72) $deadline->add(new DateInterval('PT12H'));
         elseif ($hours > 24) $deadline->add(new DateInterval('PT4H'));
         else $deadline->add(new DateInterval('PT1H'));
-        
         $limit = clone $departureTime;
         $limit->sub(new DateInterval('PT4H'));
-        
         if ($deadline > $limit) $deadline = $limit;
-
+        if ($deadline < $bookingTime) {
+            $emergencyDeadline = clone $bookingTime;
+            $emergencyDeadline->add(new DateInterval('PT30M'));
+            $deadline = min($emergencyDeadline, $limit);
+        }
         return 'trước ' . $deadline->format('H:i \n\gà\y d/m/Y');
     } catch(Exception $e) { return "trong vòng 4 giờ tới"; }
 }
-
-function safe_html($s) {
-    return htmlspecialchars((string)$s);
-}
-
+function safe_html($s) { return htmlspecialchars((string)$s); }
 function translateTitle($title) {
-    switch ($title) {
-        case 'Mr': return 'Ông';
-        case 'Mrs': return 'Bà';
-        case 'Miss': return 'Cô';
-        case 'Master': return 'Bé';
-        default: return '';
-    }
+    $map = ['Mr' => 'Ông', 'Mrs' => 'Bà', 'Miss' => 'Cô', 'Master' => 'Bé'];
+    return $map[$title] ?? '';
 }
+function formatDateSimple($dateString) { if (!$dateString) return 'N/A'; try { return (new DateTime($dateString))->format('d/m/Y'); } catch(Exception $e) { return 'N/A'; } }
+function formatTime($dateString) { if (!$dateString) return 'N/A'; try { return (new DateTime($dateString))->format('H:i'); } catch(Exception $e) { return 'N/A'; } }
 
-function generateETicketHTML($payload) {
-    $bookingData = $payload;
-    $status = isset($bookingData['status']) ? $bookingData['status'] : 'pending';
+// --- MAIN EMAIL GENERATOR ---
+function generateETicketHTML($data) {
+    $pnr = safe_html(arr_get($data, 'pnr', 'N/A'));
+    $id = safe_html(arr_get($data, 'id', 'N/A'));
+    $status = arr_get($data, 'status', 'pending');
+    $payment_status = arr_get($data, 'payment_status', 'pending');
+    $contact = arr_get($data, 'contact', []);
+    $passengers = arr_get($data, 'passengers', []);
+    $flights = arr_get($data, 'bookingDetails.selected_flights', []);
+    $bookingTime = arr_get($data, 'bookingTimestamp');
     
-    // Xử lý hiển thị trạng thái
-    $statusDisplay = '';
-    $statusNote = '';
-    
-    if ($status === 'paid') {
-        $statusDisplay = '<strong style="color: #28a745; font-size: 16px; border: 2px solid #28a745; padding: 4px 8px; border-radius: 4px;">ĐÃ THANH TOÁN / XUẤT VÉ</strong>';
-        $statusNote = '<p style="color: #28a745;"><strong>Đã hoàn tất:</strong> Vé điện tử này có giá trị để làm thủ tục bay.</p>';
-    } elseif ($status === 'cancelled') {
-        $statusDisplay = '<strong style="color: #dc3545; font-size: 16px; border: 2px solid #dc3545; padding: 4px 8px; border-radius: 4px;">ĐÃ HỦY</strong>';
-        $statusNote = '<p style="color: #dc3545;"><strong>Lưu ý:</strong> Đơn hàng này đã bị hủy và vé không còn giá trị.</p>';
+    // Dynamic Status Logic
+    $paymentStatusText = "CHƯA THANH TOÁN";
+    $paymentStatusColor = "#f59e0b"; // Orange
+    $bookingStatusText = "ĐÃ XÁC NHẬN";
+    $bookingStatusColor = "#3b82f6"; // Blue
+    $deadlineMsg = '';
+
+    if ($status === 'cancelled') {
+        $paymentStatusText = "ĐÃ HỦY";
+        $paymentStatusColor = "#ef4444"; // Red
+        $bookingStatusText = "ĐÃ HỦY";
+        $bookingStatusColor = "#ef4444";
+        $deadlineMsg = "Đơn hàng này đã bị hủy. Vé không còn hiệu lực.";
+    } elseif ($payment_status === 'paid' || $status === 'paid') {
+        $paymentStatusText = "ĐÃ THANH TOÁN";
+        $paymentStatusColor = "#22c55e"; // Green
+        $bookingStatusText = "ĐÃ XÁC NHẬN";
+        $deadlineMsg = "Vé đã được thanh toán và có giá trị sử dụng để làm thủ tục bay.";
     } else {
-        $statusDisplay = '<strong style="color: #fd7e14; font-size: 16px; border: 2px solid #fd7e14; padding: 4px 8px; border-radius: 4px;">CHƯA THANH TOÁN</strong>';
-        $depTime = arr_get($bookingData, 'bookingDetails.selected_flights.0.flights.0.departure_airport.time', '');
-        $bookTime = arr_get($bookingData, 'bookingTimestamp', '');
-        $deadline = getPaymentDeadlinePHP($depTime, $bookTime);
-        $statusNote = '<p style="color: #d9534f;"><strong>Thanh toán:</strong> Vui lòng thanh toán ' . $deadline . ' để xuất vé.</p>';
+        $depTime = arr_get($data, 'bookingDetails.selected_flights.0.flights.0.departure_airport.time', '');
+        $deadline = getPaymentDeadlinePHP($depTime, $bookingTime);
+        $deadlineMsg = "Quý khách vui lòng hoàn tất thanh toán cho đơn hàng này {$deadline} để đảm bảo vé được xuất thành công.";
     }
 
-    $pnr = safe_html(arr_get($bookingData, 'pnr', 'N/A'));
-    $orderId = safe_html(arr_get($bookingData, 'id', 'N/A'));
-    $flights = arr_get($bookingData, 'bookingDetails.selected_flights', []);
+    $qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=" . urlencode($pnr);
+
+    $outboundFareTitle = safe_html(arr_get($data, 'selectedOutboundOption.together.option_title', 'Phổ thông'));
+    $outboundBaggage = arr_get($data, 'selectedOutboundOption.together.baggage_prices', []);
+    $outboundExtra = safe_html(arr_get($data, 'ancillaries.outboundBaggage.name'));
+    $inboundFareTitle = safe_html(arr_get($data, 'selectedInboundOption.together.option_title'));
+    $inboundBaggage = arr_get($data, 'selectedInboundOption.together.baggage_prices', []);
+    $inboundExtra = safe_html(arr_get($data, 'ancillaries.inboundBaggage.name'));
+
+    $html = "<div style='font-family: Arial, sans-serif; background-color: #f3f4f6; padding: 20px; color: #333;'>
+    <div style='max-width: 800px; margin: 0 auto; background-color: white; border: 4px solid #e5e7eb; padding: 20px;'>
+        
+        <table width='100%' style='border-bottom: 2px solid #b91c1c; padding-bottom: 10px; margin-bottom: 20px;'><tr><td align='left'><span style='font-size: 24px; font-weight: bold; color: #0056b3;'>Nhã Uyên</span><span style='font-size: 24px; font-weight: bold; color: #b91c1c;'> AIR</span><div style='font-size: 12px; color: #666;'>vemaybaynhauyen.com</div></td><td align='right' valign='middle'><div style='font-weight: bold; font-size: 14px;'>Hotline hỗ trợ</div><div style='color: #b91c1c; font-size: 20px; font-weight: bold;'>0961000240</div></td></tr></table>
+        <div style='text-align: center; margin-bottom: 20px;'><h1 style='color: #b91c1c; margin: 0; font-size: 24px; text-transform: uppercase;'>VÉ ĐIỆN TỬ VÀ XÁC NHẬN HÀNH TRÌNH</h1><p style='font-size: 13px; color: #555; margin-top: 5px;'>Đây không phải là thẻ lên tàu bay.</p></div>
+        <div style='border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 25px; position: relative;'><div style='position: absolute; top: -10px; left: 15px; background: #fff; padding: 0 5px; font-size: 12px; color: #666; font-weight: bold;'>Mã đặt chỗ</div><table width='100%'><tr><td width='100' align='center'><img src='{$qrUrl}' width='80' height='80' alt='QR'></td><td align='center'><div style='font-size: 12px; color: #888;'>QR Code for PNR {$pnr}</div><div style='font-size: 36px; font-weight: bold; color: #b91c1c; letter-spacing: 2px;'>{$pnr}</div></td></tr></table></div>
+
+        <h2 style='background-color: #b91c1c; color: white; padding: 8px; margin: 0; font-size: 16px; font-weight: bold;'>1. Thông tin đặt chỗ</h2>
+        <div style='border: 1px solid #ddd; border-top: 0; padding: 15px; margin-bottom: 20px; font-size: 14px;'><table width='100%'><tr>
+            <td width='50%' valign='top' style='padding-right: 10px;'><div style='font-weight: bold;'>Mã đơn hàng:</div><div style='color: #0056b3; font-weight: bold; margin-bottom: 10px;'>{$id}</div><div style='font-weight: bold;'>Trạng thái đặt chỗ:</div><div style='color: {$bookingStatusColor}; font-weight: bold; margin-bottom: 10px;'>{$bookingStatusText}</div><div style='font-weight: bold;'>Trạng thái thanh toán:</div><div style='color: {$paymentStatusColor}; font-weight: bold; margin-bottom: 10px; text-transform: uppercase;'>{$paymentStatusText}</div></td>
+            <td width='50%' valign='top'><div style='font-weight: bold;'>Ngày giờ đặt:</div><div style='margin-bottom: 10px;'>" . formatDateTime($bookingTime) . "</div><div style='font-weight: bold;'>Liên lạc:</div><div style='margin-bottom: 5px;'>" . safe_html($contact['fullName']) . "</div><div style='margin-bottom: 5px;'>" . safe_html($contact['email']) . "</div><div style='margin-bottom: 10px;'>" . safe_html($contact['phone']) . "</div></td>
+        </tr></table></div>
+
+        <h2 style='background-color: #b91c1c; color: white; padding: 8px; margin: 0; font-size: 16px; font-weight: bold;'>2. Thông tin hành khách</h2>
+        <div style='border: 1px solid #ddd; border-top: 0; padding: 0; margin-bottom: 20px;'><table width='100%' cellpadding='8' cellspacing='0' style='font-size: 14px; border-collapse: collapse;'><tr style='background-color: #f3f4f6;'><th align='left' style='border-bottom: 1px solid #ccc;'>Hành khách</th><th align='left' style='border-bottom: 1px solid #ccc;'>Ngày sinh</th><th align='left' style='border-bottom: 1px solid #ccc;'>CCCD/Passport</th></tr>";
+        foreach ($passengers as $p) { $html .= "<tr><td style='border-bottom: 1px solid #eee;'>" . translateTitle($p['title']) . " " . strtoupper(safe_html($p['fullName'])) . "</td><td style='border-bottom: 1px solid #eee;'>" . formatDateSimple(arr_get($p, 'dob')) . "</td><td style='border-bottom: 1px solid #eee;'>" . safe_html(arr_get($p, 'idNumber', '')) . "</td></tr>"; }
+    $html .= "</table><div style='padding: 10px 15px; background-color: #fff; border-top: 1px solid #eee;'><div style='font-weight: bold; margin-bottom: 5px; font-size: 15px;'>Hành lý & Dịch vụ</div><div style='font-size: 13px; line-height: 1.5;'><div style='margin-bottom: 5px;'><strong>Chuyến đi: {$outboundFareTitle}</strong><br>";
+        foreach($outboundBaggage as $bag) $html .= "- {$bag}<br>";
+        if ($outboundExtra) $html .= "<span style='color: #0056b3;'>- Mua thêm: {$outboundExtra}</span><br>";
+    $html .= "</div>";
+    if ($inboundFareTitle) { $html .= "<div style='margin-top: 8px;'><strong>Chuyến về: {$inboundFareTitle}</strong><br>"; foreach($inboundBaggage as $bag) $html .= "- {$bag}<br>"; if ($inboundExtra) $html .= "<span style='color: #0056b3;'>- Mua thêm: {$inboundExtra}</span><br>"; $html .= "</div>"; }
+    $html .= "</div></div></div>
     
-    // Build HTML
-    $html = '<div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; background-color: #fff;">';
-    
-    // Header
-    $html .= '<div style="border-bottom: 2px solid #DA251D; padding-bottom: 10px; margin-bottom: 20px;">
-        <span style="font-size: 24px; font-weight: bold; color: #0056b3;">Nhã Uyên</span>
-        <span style="font-size: 24px; font-weight: bold; color: #DA251D;"> AIR</span>
-        <div style="float: right; text-align: right;">
-            <div style="font-size: 12px; color: #666;">Mã đơn hàng</div>
-            <div style="font-size: 18px; font-weight: bold;">' . $orderId . '</div>
-        </div>
-        <div style="clear: both;"></div>
-    </div>';
-
-    // Title & Status
-    $html .= '<div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: #DA251D; margin: 0 0 10px 0;">VÉ ĐIỆN TỬ</h1>
-        <div style="font-size: 14px; color: #555; margin-bottom: 15px;">Mã đặt chỗ (PNR): <span style="font-size: 24px; font-weight: bold; color: #333;">' . $pnr . '</span></div>
-        <div>' . $statusDisplay . '</div>
-    </div>';
-
-    // Passenger Info
-    $html .= '<div style="margin-bottom: 25px;">
-        <h3 style="background: #eee; padding: 8px; border-left: 4px solid #0056b3; margin-top: 0;">1. Thông tin hành khách</h3>
-        <table style="width: 100%; border-collapse: collapse;">
-            <tr style="background: #f9f9f9;"><th style="text-align: left; padding: 8px; border: 1px solid #ddd;">Họ và Tên</th><th style="text-align: left; padding: 8px; border: 1px solid #ddd;">Loại vé</th></tr>';
-    foreach (arr_get($bookingData, 'passengers', []) as $p) {
-        $html .= '<tr>
-            <td style="padding: 8px; border: 1px solid #ddd;">' . translateTitle($p['title']) . '. ' . strtoupper(safe_html($p['fullName'])) . '</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">' . safe_html($p['type']) . '</td>
-        </tr>';
-    }
-    $html .= '</table></div>';
-
-    // Flight Info
-    $html .= '<div style="margin-bottom: 25px;">
-        <h3 style="background: #eee; padding: 8px; border-left: 4px solid #0056b3; margin-top: 0;">2. Chi tiết chuyến bay</h3>';
-    foreach ($flights as $leg) {
-        $html .= '<div style="margin-bottom: 15px; border: 1px solid #eee; padding: 10px;">';
-        $html .= '<div style="font-weight: bold; color: #DA251D; margin-bottom: 5px;">' . safe_html($leg['type']) . '</div>';
-        foreach ($leg['flights'] as $f) {
-            $dep = $f['departure_airport'];
-            $arr = $f['arrival_airport'];
-            $html .= '<table style="width: 100%;"><tr>
-                <td style="width: 60px;"><img src="' . safe_html($f['airline_logo']) . '" style="width: 40px;"></td>
-                <td>
-                    <strong>' . safe_html($f['airline']) . ' (' . safe_html($f['flight_number']) . ')</strong><br/>
-                    ' . formatDateTime($dep['time']) . ' <strong>' . safe_html($dep['id']) . '</strong> <br/>
-                    ' . formatDateTime($arr['time']) . ' <strong>' . safe_html($arr['id']) . '</strong>
-                </td>
-            </tr></table>';
+        <h2 style='background-color: #b91c1c; color: white; padding: 8px; margin: 0; font-size: 16px; font-weight: bold;'>3. Chi tiết hành trình</h2>
+        <div style='border: 1px solid #ddd; border-top: 0; padding: 0; margin-bottom: 20px;'><table width='100%' cellpadding='8' cellspacing='0' style='font-size: 13px; border-collapse: collapse;'><tr style='background-color: #f3f4f6;'><th align='left' style='border-bottom: 1px solid #ccc;'>Chuyến bay</th><th align='left' style='border-bottom: 1px solid #ccc;'>Ngày</th><th align='left' style='border-bottom: 1px solid #ccc;'>Hành trình</th><th align='left' style='border-bottom: 1px solid #ccc;'>Giờ đi</th><th align='left' style='border-bottom: 1px solid #ccc;'>Giờ đến</th><th align='left' style='border-bottom: 1px solid #ccc;'>Hạng</th><th align='left' style='border-bottom: 1px solid #ccc;'>Trạng thái</th></tr>";
+        foreach ($flights as $leg) {
+            $isReturn = strpos(strtolower($leg['type']), 'về') !== false;
+            $fare = $isReturn ? $inboundFareTitle : $outboundFareTitle;
+            foreach ($leg['flights'] as $f) {
+                $dep = $f['departure_airport']; $arr = $f['arrival_airport'];
+                $html .= "<tr><td style='border-bottom: 1px solid #eee;'><strong>" . safe_html($f['airline']) . "</strong><br>" . safe_html($f['flight_number']) . "</td><td style='border-bottom: 1px solid #eee;'>" . formatDateSimple($dep['time']) . "</td><td style='border-bottom: 1px solid #eee;'><strong>" . safe_html($dep['id']) . "</strong> &#8594; <strong>" . safe_html($arr['id']) . "</strong></td><td style='border-bottom: 1px solid #eee; font-weight: bold;'>" . formatTime($dep['time']) . "</td><td style='border-bottom: 1px solid #eee; font-weight: bold;'>" . formatTime($arr['time']) . "</td><td style='border-bottom: 1px solid #eee;'>{$fare}</td><td style='border-bottom: 1px solid #eee; color: green;'>Đã xác nhận</td></tr>";
+            }
         }
-        $html .= '</div>';
-    }
-    $html .= '</div>';
+    $html .= "</table></div>
 
-    // Notes
-    $html .= '<div style="margin-bottom: 20px;">
-        <h3 style="background: #eee; padding: 8px; border-left: 4px solid #0056b3; margin-top: 0;">3. Lưu ý</h3>
-        <div style="font-size: 13px; line-height: 1.6;">
-            ' . $statusNote . '
-            <p>Quý khách vui lòng có mặt tại sân bay trước giờ khởi hành ít nhất 90 phút (Nội địa) hoặc 180 phút (Quốc tế).</p>
-            <p>Mọi thắc mắc xin liên hệ hotline: <strong style="color: #DA251D;">0961000240</strong></p>
+        <h2 style='background-color: #b91c1c; color: white; padding: 8px; margin: 0; font-size: 16px; font-weight: bold;'>4. Lưu ý quan trọng</h2>
+        <div style='border: 1px solid #ddd; border-top: 0; padding: 15px; margin-bottom: 20px; font-size: 14px; line-height: 1.6;'>
+            <p><strong style='color:{$paymentStatusColor}'>".($payment_status === 'paid' ? 'Thông báo' : 'Thanh toán').":</strong> {$deadlineMsg}</p>
+            <p><strong>Giấy tờ:</strong> Vui lòng mang theo giấy tờ tùy thân hợp lệ (CCCD, Passport) khi làm thủ tục tại sân bay.</p>
+            <p><strong>Thời gian:</strong> Có mặt tại sân bay trước giờ khởi hành ít nhất 90 phút (Nội địa) và 180 phút (Quốc tế).</p>
         </div>
-    </div>';
 
-    $html .= '</div>';
+        <div style='text-align: center; font-size: 12px; color: #666; border-top: 1px solid #eee; padding-top: 15px;'>Cảm ơn quý khách đã sử dụng dịch vụ của Vemaybaynhauyen.com. Chúc quý khách một chuyến bay tốt đẹp!</div>
+    </div></div>";
+    
     return $html;
 }
 
@@ -220,14 +200,20 @@ function sendCustomerConfirmation($payload) {
     $email = arr_get($payload, 'contact.email');
     if (!$email) return;
     
-    $status = isset($payload['status']) ? $payload['status'] : 'pending';
-    $subjectPrefix = 'Xác nhận đặt vé';
-    if ($status === 'paid') $subjectPrefix = 'Vé điện tử & Xác nhận thanh toán';
-    if ($status === 'cancelled') $subjectPrefix = 'Thông báo Hủy vé';
+    $status = arr_get($payload, 'status');
+    $payment_status = arr_get($payload, 'payment_status');
+    $pnr = arr_get($payload, 'pnr');
+    
+    $subject = "[XÁC NHẬN] Đơn hàng {$pnr}";
+    if ($status === 'cancelled') {
+        $subject = "[HỦY VÉ] Thông báo đơn hàng {$pnr}";
+    } elseif ($payment_status === 'paid') {
+        $subject = "[VÉ ĐIỆN TỬ] Đơn hàng {$pnr} - Đã xuất vé";
+    }
 
     $mail = createMailer();
     $mail->addAddress($email);
-    $mail->Subject = '[' . $subjectPrefix . '] Mã đơn: ' . arr_get($payload, 'id') . ' - PNR: ' . arr_get($payload, 'pnr');
+    $mail->Subject = $subject;
     $mail->isHTML(true);
     $mail->Body = generateETicketHTML($payload);
     $mail->send();
@@ -236,7 +222,7 @@ function sendCustomerConfirmation($payload) {
 function sendAdminNotification($payload) {
     $mail = createMailer();
     $mail->addAddress(ADMIN_EMAIL);
-    $status = isset($payload['status']) ? $payload['status'] : 'pending';
+    $status = arr_get($payload, 'status', 'pending');
     $mail->Subject = '[ADMIN - ' . strtoupper($status) . '] Booking: ' . arr_get($payload, 'pnr');
     $mail->isHTML(true);
     $mail->Body = generateETicketHTML($payload);

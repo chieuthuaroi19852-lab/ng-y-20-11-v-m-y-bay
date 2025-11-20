@@ -48,17 +48,21 @@ const QRCode: React.FC<{ code: string }> = ({ code }) => {
 
 
 const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const options: Intl.DateTimeFormatOptions = { weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit' };
-    return date.toLocaleDateString('vi-VN', options);
+    if (!dateString) return 'N/A';
+    try {
+        const date = new Date(dateString);
+        const options: Intl.DateTimeFormatOptions = { weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit' };
+        return date.toLocaleDateString('vi-VN', options);
+    } catch {
+        return 'Invalid Date';
+    }
 }
 
-// FIX: Improved date formatting to handle various formats and invalid dates gracefully.
 const formatSimpleDate = (dateString: string) => {
     if (!dateString) return 'N/A';
     try {
         const date = new Date(dateString);
-        if(isNaN(date.getTime())) { // Check if date is valid
+        if(isNaN(date.getTime())) {
             const parts = dateString.split('-');
             if(parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
             return dateString;
@@ -71,7 +75,12 @@ const formatSimpleDate = (dateString: string) => {
 
 
 const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    if (!dateString) return 'N/A';
+    try {
+        return new Date(dateString).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+        return 'Invalid Time';
+    }
 }
 
 const getPaymentDeadline = (departureTimeStr: string, bookingTimeInput: Date | string): string => {
@@ -82,26 +91,19 @@ const getPaymentDeadline = (departureTimeStr: string, bookingTimeInput: Date | s
 
         let deadlineFromBooking: Date;
 
-        // Deadline based on how far in advance the booking is made
-        if (hoursToDeparture > 72) { // More than 3 days
-            deadlineFromBooking = new Date(bookingTime.getTime() + 12 * 60 * 60 * 1000); // 12 hours to pay
-        } else if (hoursToDeparture > 24) { // 1 to 3 days
-            deadlineFromBooking = new Date(bookingTime.getTime() + 4 * 60 * 60 * 1000); // 4 hours to pay
-        } else { // Less than 24 hours
-            deadlineFromBooking = new Date(bookingTime.getTime() + 1 * 60 * 60 * 1000); // 1 hour to pay
+        if (hoursToDeparture > 72) {
+            deadlineFromBooking = new Date(bookingTime.getTime() + 12 * 60 * 60 * 1000);
+        } else if (hoursToDeparture > 24) {
+            deadlineFromBooking = new Date(bookingTime.getTime() + 4 * 60 * 60 * 1000);
+        } else {
+            deadlineFromBooking = new Date(bookingTime.getTime() + 1 * 60 * 60 * 1000);
         }
         
-        // A hard deadline: must be paid at least 4 hours before departure
         const deadlineFromDeparture = new Date(departureTime.getTime() - 4 * 60 * 60 * 1000);
-
-        // The final deadline is the earlier of the two
         const finalDeadline = new Date(Math.min(deadlineFromBooking.getTime(), deadlineFromDeparture.getTime()));
 
-        // Ensure the deadline is not in the past (edge case for very last minute bookings)
         if (finalDeadline.getTime() < bookingTime.getTime()) {
-            // If calculated deadline is already passed, give 30 mins.
             const emergencyDeadline = new Date(bookingTime.getTime() + 30 * 60 * 1000);
-            // But it cannot be after the flight departs minus buffer
             const finalEmergencyDeadline = new Date(Math.min(emergencyDeadline.getTime(), deadlineFromDeparture.getTime()));
             return `trước ${formatTime(finalEmergencyDeadline.toISOString())} ngày ${finalEmergencyDeadline.toLocaleDateString('vi-VN', {day: '2-digit', month: '2-digit', year: 'numeric'})}`;
         }
@@ -152,7 +154,6 @@ const ErrorDisplay: React.FC = () => (
 
 const ETicket: React.FC<ETicketProps> = ({ pnr, bookingTimestamp, flight, bookingData, bookingDetails, selectedOutboundOption, selectedInboundOption }) => {
 
-    // FIX: Added more safety checks to prevent rendering with incomplete data, which causes white screen crashes.
     if (!bookingDetails || !selectedOutboundOption || !flight || !bookingData.contact || !Array.isArray(bookingData.passengers)) {
         return <ErrorDisplay />;
     }
@@ -160,6 +161,22 @@ const ETicket: React.FC<ETicketProps> = ({ pnr, bookingTimestamp, flight, bookin
     const departureTime = bookingDetails.selected_flights?.[0]?.flights?.[0]?.departure_airport?.time;
     const paymentDeadline = departureTime ? getPaymentDeadline(departureTime, bookingTimestamp) : 'N/A';
     const bookingTime = typeof bookingTimestamp === 'string' ? new Date(bookingTimestamp) : bookingTimestamp;
+    
+    // DYNAMIC STATUS LOGIC
+    let paymentStatusText = "CHƯA THANH TOÁN";
+    let paymentStatusColor = "text-orange-500 bg-orange-100";
+    let importantNote = `Quý khách vui lòng hoàn tất thanh toán cho đơn hàng này ${paymentDeadline} để đảm bảo vé được xuất thành công.`;
+
+    if (bookingData.status === 'cancelled') {
+        paymentStatusText = "ĐÃ HỦY";
+        paymentStatusColor = "text-red-600 bg-red-100";
+        importantNote = "Đơn hàng này đã bị hủy. Vé không còn hiệu lực.";
+    } else if (bookingData.payment_status === 'paid' || bookingData.status === 'paid') {
+        paymentStatusText = "ĐÃ THANH TOÁN";
+        paymentStatusColor = "text-green-600 bg-green-100";
+        importantNote = "Vé đã được thanh toán và có giá trị sử dụng để làm thủ tục bay.";
+    }
+
 
     const renderFlightLeg = (leg: FlightDetail, key: string, fareName?: string) => (
         <tr key={key} className="border-b border-gray-300 text-sm">
@@ -212,10 +229,14 @@ const ETicket: React.FC<ETicketProps> = ({ pnr, bookingTimestamp, flight, bookin
                         <div className="font-bold text-blue-600">{bookingData.id}</div>
 
                         <div className="font-semibold">Trạng thái đặt chỗ:</div>
-                        <div className="text-green-600 font-bold">ĐÃ XÁC NHẬN</div>
+                        <div className={`font-bold ${bookingData.status === 'cancelled' ? 'text-red-600' : 'text-green-600'}`}>
+                            {bookingData.status === 'cancelled' ? 'ĐÃ HỦY' : 'ĐÃ XÁC NHẬN'}
+                        </div>
                         
                         <div className="font-semibold">Trạng thái thanh toán:</div>
-                        <div className="text-orange-500 font-bold bg-orange-100 px-2 py-0.5 rounded-full inline-block">CHƯA THANH TOÁN</div>
+                        <div className={`font-bold px-2 py-0.5 rounded-full inline-block ${paymentStatusColor}`}>
+                            {paymentStatusText}
+                        </div>
 
                         <div className="font-semibold">Ngày giờ đặt:</div>
                         <div>{bookingTime.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
@@ -302,7 +323,7 @@ const ETicket: React.FC<ETicketProps> = ({ pnr, bookingTimestamp, flight, bookin
 
                 <Section title="4. Lưu ý quan trọng">
                      <div className="text-sm space-y-2">
-                        <p><strong className="text-red-600">Thanh toán:</strong> Quý khách vui lòng hoàn tất thanh toán cho đơn hàng này {paymentDeadline} để đảm bảo vé được xuất thành công.</p>
+                        <p><strong className={`font-bold ${paymentStatusColor.replace('bg-', 'text-')}`}>{paymentStatusText.startsWith('ĐÃ') ? 'Thông báo' : 'Thanh toán'}:</strong> {importantNote}</p>
                         <p><strong>Giấy tờ:</strong> Vui lòng mang theo giấy tờ tùy thân hợp lệ (CCCD, Passport) khi làm thủ tục tại sân bay.</p>
                         <p><strong>Thời gian:</strong> Có mặt tại sân bay trước giờ khởi hành ít nhất 90 phút đối với chuyến bay nội địa và 180 phút đối với chuyến bay quốc tế.</p>
                     </div>
