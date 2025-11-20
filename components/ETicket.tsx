@@ -53,11 +53,17 @@ const formatDate = (dateString: string) => {
     return date.toLocaleDateString('vi-VN', options);
 }
 
+// FIX: Improved date formatting to handle various formats and invalid dates gracefully.
 const formatSimpleDate = (dateString: string) => {
     if (!dateString) return 'N/A';
     try {
-        const [year, month, day] = dateString.split('-');
-        return `${day}/${month}/${year}`;
+        const date = new Date(dateString);
+        if(isNaN(date.getTime())) { // Check if date is valid
+            const parts = dateString.split('-');
+            if(parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+            return dateString;
+        }
+        return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
     } catch {
         return dateString;
     }
@@ -146,8 +152,8 @@ const ErrorDisplay: React.FC = () => (
 
 const ETicket: React.FC<ETicketProps> = ({ pnr, bookingTimestamp, flight, bookingData, bookingDetails, selectedOutboundOption, selectedInboundOption }) => {
 
-    // CRITICAL: Add a guard to prevent rendering with incomplete data, which causes white screen crashes.
-    if (!bookingDetails || !selectedOutboundOption || !flight || !bookingData.contact) {
+    // FIX: Added more safety checks to prevent rendering with incomplete data, which causes white screen crashes.
+    if (!bookingDetails || !selectedOutboundOption || !flight || !bookingData.contact || !Array.isArray(bookingData.passengers)) {
         return <ErrorDisplay />;
     }
 
