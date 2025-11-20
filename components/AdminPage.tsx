@@ -203,8 +203,30 @@ const FeeConfiguration: React.FC<{ initialConfig: AdminFeeConfig }> = ({ initial
 const PaymentProcessingModal: React.FC<{ booking: BookingData; onClose: () => void; onSuccess: () => void }> = ({ booking, onClose, onSuccess }) => {
     const [amount, setAmount] = useState(booking.total_amount || 0);
     const [method, setMethod] = useState('transfer'); 
-    const [txnId, setTxnId] = useState('');
+    const [txnId, setTxnId] = useState(booking.id || ''); 
     const [isLoading, setIsLoading] = useState(false);
+
+    // Auto-fill amount and txnId when the booking prop changes
+    useEffect(() => {
+        if (booking) {
+            let finalAmount = booking.total_amount || 0;
+            
+            // Fallback calculation if total_amount is missing (for old bookings) and data is safe
+            if (finalAmount === 0 && booking.flight && !Array.isArray(booking.flight)) {
+                 const paxCount = (Array.isArray(booking.passengers) && booking.passengers.length > 0) ? booking.passengers.length : 1;
+                 // Rough estimate: Price + 15% tax/fees
+                 const price = booking.flight.price_net || 0; 
+                 finalAmount = price * paxCount * 1.15; 
+                 
+                 // Add ancillary if possible
+                 if (booking.ancillaries?.outboundBaggage) finalAmount += (booking.ancillaries.outboundBaggage.price || 0);
+                 if (booking.ancillaries?.inboundBaggage) finalAmount += (booking.ancillaries.inboundBaggage.price || 0);
+            }
+            
+            setAmount(Math.round(finalAmount));
+            setTxnId(booking.id || '');
+        }
+    }, [booking]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -223,7 +245,7 @@ const PaymentProcessingModal: React.FC<{ booking: BookingData; onClose: () => vo
              await adminService.updateBookingStatus(booking.id, 'paid', 'Thanh toán hoàn tất qua Admin');
 
              // 3. Send Email with 'paid' status
-             const updatedBooking = { ...booking, status: 'paid', payment_status: 'paid', payment_info: paymentInfo };
+             const updatedBooking: BookingData = { ...booking, status: 'paid', payment_status: 'paid', payment_info: paymentInfo };
              await emailService.sendConfirmationEmail(updatedBooking);
              
              alert("Đã ghi nhận thanh toán và gửi vé điện tử cho khách hàng.");
@@ -270,11 +292,30 @@ const PaymentProcessingModal: React.FC<{ booking: BookingData; onClose: () => vo
 };
 
 
-// ... EditUserModal, AdminModal, ResetPasswordModal remain the same ...
+// --- EditUserModal: FIXED ---
 const EditUserModal: React.FC<{ user: User; onClose: () => void; onSave: () => void }> = ({ user, onClose, onSave }) => {
     const [formData, setFormData] = useState(user);
     const [isLoading, setIsLoading] = useState(false);
     const [pointsDelta, setPointsDelta] = useState(0); 
+
+    // Ensure form data is refreshed when user prop changes, and nulls are handled
+    useEffect(() => {
+        // Map gender from DB (Male/Female/Other) to Form (Mr/Mrs)
+        let genderVal = 'Mr';
+        const g = user.gender ? user.gender : ''; 
+        if (g === 'Female' || g === 'Mrs' || g === 'Miss' || g === 'Nữ' || g === 'Nu') {
+            genderVal = 'Mrs';
+        }
+        
+        setFormData({
+            ...user,
+            gender: genderVal,
+            dob: user.dob || '',
+            id_card: user.id_card || '',
+            address: user.address || '',
+            nationality: user.nationality || ''
+        });
+    }, [user]);
 
     const handleChange = (field: keyof User, value: string) => {
         setFormData(prev => ({ ...prev, [field]: value }));
@@ -294,7 +335,7 @@ const EditUserModal: React.FC<{ user: User; onClose: () => void; onSave: () => v
         if (updateResult.success) {
             onSave();
         } else {
-            alert(updateResult.message);
+            alert(updateResult.message || 'Có lỗi xảy ra.');
         }
     };
 
@@ -303,9 +344,9 @@ const EditUserModal: React.FC<{ user: User; onClose: () => void; onSave: () => v
              <div className="bg-[var(--card-bg-color)] p-6 rounded-lg shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
                 <h3 className="text-lg font-bold mb-4">Chỉnh sửa người dùng</h3>
                 <form onSubmit={handleSubmit} className="space-y-3">
-                    <input type="text" placeholder="Tên" value={formData.name} onChange={e => handleChange('name', e.target.value)} className="w-full p-2 border rounded bg-transparent" required />
-                    <input type="email" placeholder="Email" value={formData.email} onChange={e => handleChange('email', e.target.value)} className="w-full p-2 border rounded bg-transparent" required />
-                    <input type="text" placeholder="SĐT" value={formData.phone} onChange={e => handleChange('phone', e.target.value)} className="w-full p-2 border rounded bg-transparent" required />
+                    <input type="text" placeholder="Tên" value={formData.name || ''} onChange={e => handleChange('name', e.target.value)} className="w-full p-2 border rounded bg-transparent" required />
+                    <input type="email" placeholder="Email" value={formData.email || ''} onChange={e => handleChange('email', e.target.value)} className="w-full p-2 border rounded bg-transparent" required />
+                    <input type="text" placeholder="SĐT" value={formData.phone || ''} onChange={e => handleChange('phone', e.target.value)} className="w-full p-2 border rounded bg-transparent" required />
                     
                     <div className="grid grid-cols-2 gap-2">
                         <input type="date" placeholder="Ngày sinh" value={formData.dob || ''} onChange={e => handleChange('dob', e.target.value)} className="w-full p-2 border rounded bg-transparent" />
@@ -527,7 +568,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void, onExitAdmin: () => void }
 
     const getItinerary = (booking: BookingData): string => {
         const allLegs = booking.flight?.flights;
-        if (!allLegs || allLegs.length === 0) return 'Dữ liệu không đầy đủ';
+        if (!allLegs || !Array.isArray(allLegs) || allLegs.length === 0) return 'Dữ liệu không đầy đủ';
         const firstLeg = allLegs[0];
         const lastLeg = allLegs[allLegs.length - 1];
         if (!firstLeg?.departure_airport?.id || !lastLeg?.arrival_airport?.id) return 'Dữ liệu không đầy đủ';
@@ -616,7 +657,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void, onExitAdmin: () => void }
             }
             await fetchData();
         } else {
-            alert("Lỗi cập nhật: " + result.message);
+            alert("Lỗi cập nhật: " + (result.message || 'Lỗi không xác định'));
         }
         setIsUpdatingStatus(null);
     }

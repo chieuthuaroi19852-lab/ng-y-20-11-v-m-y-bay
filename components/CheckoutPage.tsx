@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { type FlightOption, type Passengers, type PassengerDetails, type ContactDetails, type BookingData, type FlightDetailsResult, type BookingOption, type AdminFeeConfig, User, SelectedAncillaries, AncillaryOption, FeeConfig, SearchParams } from '../types';
 import { ArrowLeftIcon, ClockIcon, BriefcaseIcon, UserIcon, InfoIcon, CheckCircleIcon, TicketIcon, PhoneIcon, EnvelopeIcon, IdentificationIcon, CakeIcon, DownloadIcon, MailIcon, CloseIcon, PencilIcon, SearchIcon, CreditCardIcon } from './icons/Icons';
@@ -35,7 +36,6 @@ const capitalizeName = (name: string) => {
     return name.toLowerCase().split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 };
 
-// Helper to ensure phone number is in +84 format for validation
 const normalizePhone = (phone: string) => {
     if (!phone) return '+84';
     const cleanPhone = phone.replace(/\s+/g, '');
@@ -198,87 +198,39 @@ const DetailedFlightSummary: React.FC<{
     );
 };
 
+type PriceData = {
+    baseTotal: number;
+    tax: number;
+    serviceFee: number;
+    ancillaryCost: number;
+    finalTotal: number;
+};
 
-const PriceDetails: React.FC<{ flight: FlightOption, passengers: Passengers, selectedOutboundOption: BookingOption | null, selectedInboundOption: BookingOption | null, passengerAncillaries: PassengerAncillaries[] }> = ({ flight, passengers, selectedOutboundOption, selectedInboundOption, passengerAncillaries }) => {
-    const [feeConfig, setFeeConfig] = useState<AdminFeeConfig | null>(null);
-
-    useEffect(() => {
-        adminService.getFeeConfig().then(setFeeConfig);
-    }, []);
-
-    const { 
-        baseTotal, 
-        tax, 
-        serviceFee,
-        ancillaryCost,
-        finalTotal 
-    } = useMemo(() => {
-        const pricedPassengers = passengers.adults + passengers.children;
-        if (!selectedOutboundOption || pricedPassengers === 0) {
-            return { baseTotal: 0, tax: 0, serviceFee: 0, ancillaryCost: 0, finalTotal: 0 };
-        }
-
-        const outboundFareUSD = selectedOutboundOption.together.price;
-        const inboundFareUSD = (flight.type.toLowerCase().includes('round') && selectedInboundOption) 
-            ? selectedInboundOption.together.price 
-            : 0;
-        
-        const currentAncillaryCost = passengerAncillaries.reduce((total, p) => {
-            return total + (p.outboundBaggage?.price || 0) + (p.inboundBaggage?.price || 0);
-        }, 0);
-
-        const currentBaseTotal = (outboundFareUSD + inboundFareUSD) * USD_VND_RATE * pricedPassengers;
-
-        if (!feeConfig) {
-             const defaultTax = currentBaseTotal * 0.1; // Default 10% tax if config fails
-             return { baseTotal: currentBaseTotal, tax: defaultTax, serviceFee: 0, ancillaryCost: currentAncillaryCost, finalTotal: currentBaseTotal + defaultTax + currentAncillaryCost };
-        }
-
-        const primaryAirline = flight.flights[0]?.airline;
-        const departureAirport = flight.flights[0]?.departure_airport.id;
-        const arrivalAirport = flight.flights[flight.flights.length - 1]?.arrival_airport.id;
-        
-        const resolvedConfig = adminService.resolveFee(feeConfig, primaryAirline, departureAirport, arrivalAirport);
-
-        let calculatedTax = 0;
-        if (resolvedConfig.tax_type === 'percent') {
-            calculatedTax = currentBaseTotal * (resolvedConfig.tax_value / 100);
-        } else {
-            calculatedTax = resolvedConfig.tax_value * pricedPassengers;
-        }
-
-        let calculatedServiceFee = 0;
-        if (resolvedConfig.service_type === 'percent') {
-            calculatedServiceFee = currentBaseTotal * (resolvedConfig.service_value / 100);
-        } else {
-            calculatedServiceFee = resolvedConfig.service_value * pricedPassengers;
-        }
-
-        const currentFinalTotal = currentBaseTotal + calculatedTax + calculatedServiceFee + currentAncillaryCost;
-        
-        return { baseTotal: currentBaseTotal, tax: calculatedTax, serviceFee: calculatedServiceFee, ancillaryCost: currentAncillaryCost, finalTotal: currentFinalTotal };
-        
-    }, [flight, passengers, selectedOutboundOption, selectedInboundOption, feeConfig, passengerAncillaries]);
-
+const PriceDetails: React.FC<{ 
+    priceData: PriceData;
+    passengers: Passengers;
+    feeConfig: AdminFeeConfig | null;
+}> = ({ priceData, passengers, feeConfig }) => {
+    
     return (
         <div className="bg-[var(--card-bg-color)] p-6 rounded-lg shadow-md">
             <h3 className="text-xl font-bold text-[var(--text-color)] border-b border-[var(--border-color)] pb-3 mb-4">Chi tiết giá</h3>
             <div className="space-y-2 text-[var(--text-color)]">
                 <div className="flex justify-between">
                     <span>Giá vé ({passengers.adults + passengers.children}x)</span> 
-                    <span>{formatCurrency(baseTotal)}</span>
+                    <span>{formatCurrency(priceData.baseTotal)}</span>
                 </div>
                 {passengers.infants > 0 && <div className="flex justify-between"><span>Vé em bé ({passengers.infants}x)</span> <span>Liên hệ</span></div>}
                  
                  <div className="border-t border-[var(--border-color)] my-2 pt-2 space-y-2">
-                    <div className="flex justify-between"><span>Thuế</span> <span>{feeConfig ? formatCurrency(tax) : 'Đang tính...'}</span></div>
-                    <div className="flex justify-between"><span>Phí dịch vụ</span> <span>{feeConfig ? formatCurrency(serviceFee) : 'Đang tính...'}</span></div>
-                     {ancillaryCost > 0 && (
-                        <div className="flex justify-between"><span>Hành lý mua thêm</span> <span>{formatCurrency(ancillaryCost)}</span></div>
+                    <div className="flex justify-between"><span>Thuế</span> <span>{feeConfig ? formatCurrency(priceData.tax) : 'Đang tính...'}</span></div>
+                    <div className="flex justify-between"><span>Phí dịch vụ</span> <span>{feeConfig ? formatCurrency(priceData.serviceFee) : 'Đang tính...'}</span></div>
+                     {priceData.ancillaryCost > 0 && (
+                        <div className="flex justify-between"><span>Hành lý mua thêm</span> <span>{formatCurrency(priceData.ancillaryCost)}</span></div>
                     )}
                 </div>
                 <div className="border-t border-[var(--border-color)] my-2"></div>
-                <div className="flex justify-between font-bold text-lg"><span>Tổng cộng</span> <span className="text-red-600">{feeConfig ? formatCurrency(finalTotal) : 'Đang tính...'}</span></div>
+                <div className="flex justify-between font-bold text-lg"><span>Tổng cộng</span> <span className="text-red-600">{feeConfig ? formatCurrency(priceData.finalTotal) : 'Đang tính...'}</span></div>
             </div>
         </div>
     );
@@ -309,13 +261,11 @@ const BookingForm: React.FC<{passengers: Passengers, flight: FlightOption, onSub
     const [passengerForms, setPassengerForms] = useState<PassengerDetails[]>(initialPassengerForms);
     const [contactForm, setContactForm] = useState<ContactDetails>({ fullName: '', email: '', phone: '+84', gender: 'Mr', address: '' });
 
-    // Effect to reset forms when passenger counts change and pre-fill with logged-in user's data
     useEffect(() => {
         const newPassengerForms = [...initialPassengerForms];
         let newContactForm: ContactDetails = { fullName: '', email: '', phone: '+84', gender: 'Mr', address: '' };
 
         if (currentUser) {
-            // Pre-fill contact form
             newContactForm = {
                 fullName: capitalizeName(currentUser.name || ''),
                 email: currentUser.email || '',
@@ -323,8 +273,6 @@ const BookingForm: React.FC<{passengers: Passengers, flight: FlightOption, onSub
                 gender: (currentUser.gender as any) || 'Mr',
                 address: currentUser.address || '',
             };
-            
-            // Pre-fill first passenger's name
             if (newPassengerForms.length > 0) {
                 newPassengerForms[0] = {
                     ...newPassengerForms[0],
@@ -348,8 +296,7 @@ const BookingForm: React.FC<{passengers: Passengers, flight: FlightOption, onSub
     const isVietjetFlight = useMemo(() => flight.flights.some(f => f.airline.toLowerCase().includes('vietjet')), [flight]);
     
     const validatePassengerDob = (dob: string, type: PassengerDetails['type']): string | undefined => {
-        if (!dob) return undefined; // Don't validate if empty
-
+        if (!dob) return undefined; 
         const age = calculateAge(dob, departureDate);
         let error: string | undefined = undefined;
 
@@ -373,14 +320,9 @@ const BookingForm: React.FC<{passengers: Passengers, flight: FlightOption, onSub
     const handlePassengerChange = (index: number, field: keyof Omit<PassengerDetails, 'type'>, value: string) => {
         const updatedForms = [...passengerForms];
         let processedValue = value;
-
-        if (field === 'fullName') {
-            processedValue = removeDiacritics(value).toUpperCase();
-        }
-
+        if (field === 'fullName') processedValue = removeDiacritics(value).toUpperCase();
         updatedForms[index] = {...updatedForms[index], [field]: processedValue as any};
         setPassengerForms(updatedForms);
-        
         if (field === 'dob') {
             const error = validatePassengerDob(value, updatedForms[index].type);
             const newErrors = [...formErrors];
@@ -391,40 +333,23 @@ const BookingForm: React.FC<{passengers: Passengers, flight: FlightOption, onSub
     
     const handleContactChange = (field: keyof ContactDetails, value: string) => {
         let processedValue = value;
-        if (field === 'fullName') {
-            processedValue = capitalizeName(value);
-        }
+        if (field === 'fullName') processedValue = capitalizeName(value);
         setContactForm(prev => ({...prev, [field]: processedValue as any}));
     };
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         setValidationError('');
-        
         let isValid = true;
         const newErrors: Array<{[key: string]: string | undefined}> = passengerForms.map(() => ({}));
-        
         passengerForms.forEach((p, index) => {
-            if (!p.fullName.trim()) {
-                newErrors[index].fullName = 'Vui lòng nhập họ tên.';
-                isValid = false;
-            }
-            if (isVietjetFlight && p.type === 'Adult' && !p.idNumber.trim()) {
-                 newErrors[index].idNumber = 'CCCD/Passport là bắt buộc.';
-                 isValid = false;
-            }
+            if (!p.fullName.trim()) { newErrors[index].fullName = 'Vui lòng nhập họ tên.'; isValid = false; }
+            if (isVietjetFlight && p.type === 'Adult' && !p.idNumber.trim()) { newErrors[index].idNumber = 'CCCD/Passport là bắt buộc.'; isValid = false; }
             if (p.dob) {
                 const dobError = validatePassengerDob(p.dob, p.type);
-                if (dobError) {
-                    newErrors[index].dob = dobError;
-                    isValid = false;
-                }
-            } else if (p.type !== 'Adult') { // DOB is mandatory for children/infants
-                 newErrors[index].dob = 'Ngày sinh là bắt buộc.';
-                 isValid = false;
-            }
+                if (dobError) { newErrors[index].dob = dobError; isValid = false; }
+            } else if (p.type !== 'Adult') { newErrors[index].dob = 'Ngày sinh là bắt buộc.'; isValid = false; }
         });
-
         setFormErrors(newErrors);
 
         if(!contactForm.fullName.trim() || !contactForm.email.trim() || !contactForm.phone.trim() || contactForm.phone.length < 11) {
@@ -436,12 +361,9 @@ const BookingForm: React.FC<{passengers: Passengers, flight: FlightOption, onSub
         }
         
         if (!isValid) {
-            if (!validationError) {
-                setValidationError('Vui lòng kiểm tra lại các thông tin có lỗi màu đỏ.');
-            }
+            if (!validationError) setValidationError('Vui lòng kiểm tra lại các thông tin có lỗi màu đỏ.');
             return;
         }
-
         onSubmit({ passengers: passengerForms, contact: contactForm });
     }
 
@@ -556,188 +478,6 @@ const BookingForm: React.FC<{passengers: Passengers, flight: FlightOption, onSub
     );
 };
 
-const BookingConfirmation: React.FC<{
-    onNewSearch: () => void;
-    bookingData: BookingData;
-    onShowTicket: () => void;
-    searchParamsForCompactForm: SearchParams | null;
-    onSearch: (params: SearchParams) => void;
-}> = ({ onNewSearch, bookingData, onShowTicket, searchParamsForCompactForm, onSearch }) => {
-
-    return (
-        <div className="container mx-auto px-4 py-8 max-w-7xl">
-             <BookingSteps currentStep="complete" />
-             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-                <div className="lg:col-span-2 max-w-4xl mx-auto bg-[var(--card-bg-color)] p-6 sm:p-8 rounded-lg shadow-lg w-full">
-                    <div className="text-center border-b border-[var(--border-color)] pb-4 mb-6">
-                        <CheckCircleIcon className="mx-auto h-16 w-16 text-green-500" />
-                        <h2 className="mt-4 text-3xl font-bold text-[var(--text-color)]">Yêu cầu đặt vé đã được gửi!</h2>
-                        <p className="mt-2 text-gray-600 dark:text-gray-300">Cảm ơn <span className="font-semibold">{bookingData.contact.fullName}</span>, chúng tôi đã nhận được yêu cầu của bạn.</p>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-center sm:text-left mb-6 bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-[var(--border-color)]">
-                        <div><p className="text-sm text-gray-500 dark:text-gray-400">Mã đơn hàng</p><p className="font-bold text-xl text-red-600 tracking-wider">{bookingData.id}</p></div>
-                        <div className="sm:text-right"><p className="text-sm text-gray-500 dark:text-gray-400">Mã đặt chỗ (PNR)</p><p className="font-bold text-xl text-red-600 tracking-wider">{bookingData.pnr}</p></div>
-                    </div>
-
-                    <div className="space-y-8">
-                        <DetailedFlightSummary 
-                            details={bookingData.bookingDetails} 
-                            selectedOutboundOption={bookingData.selectedOutboundOption} 
-                            selectedInboundOption={bookingData.selectedInboundOption} 
-                            ancillaries={bookingData.ancillaries}
-                        />
-                    </div>
-
-                    <div className="mt-8 p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg text-orange-800 dark:text-orange-200 flex items-start gap-3">
-                        <InfoIcon className="w-6 h-6 flex-shrink-0 mt-0.5" />
-                        <div>
-                             <h4 className="font-bold">Lưu ý quan trọng về Giá vé & Xuất vé</h4>
-                             <p className="text-sm mt-1">
-                                Giá vé và tình trạng chỗ có thể thay đổi tùy thuộc vào thời điểm xuất vé thực tế của Hãng hàng không. 
-                                Quý khách vui lòng hoàn tất thanh toán sớm để đảm bảo giữ được mức giá và hành trình đã chọn.
-                                Vé chỉ được coi là xuất thành công khi có xác nhận Số vé điện tử từ nhân viên phòng vé.
-                             </p>
-                        </div>
-                    </div>
-
-                    <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg text-center">
-                        <h4 className="font-semibold text-blue-800 dark:text-blue-300">Bước tiếp theo là gì?</h4>
-                        <p className="text-sm text-blue-700 dark:text-blue-400 mt-1">Nhân viên sẽ sớm kiểm tra tình trạng vé và liên hệ với bạn qua SĐT <strong className="whitespace-nowrap">{bookingData.contact.phone}</strong> hoặc email <strong className="whitespace-nowrap">{bookingData.contact.email}</strong> để xác nhận và hướng dẫn thanh toán.</p>
-                    </div>
-                    <div className="flex flex-col sm:flex-row items-center justify-center gap-4 border-t border-[var(--border-color)] pt-6 mt-6">
-                        <button onClick={onNewSearch} className="w-full sm:w-auto bg-gray-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-gray-800 transition-colors duration-300">
-                            Tìm kiếm mới
-                        </button>
-                        <button onClick={onShowTicket} className="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-red-700 transition-colors duration-300">
-                            <DownloadIcon />
-                            Xem & Tải vé điện tử
-                        </button>
-                    </div>
-                </div>
-                 <div className="lg:col-span-1 space-y-6">
-                     <div className="bg-[var(--card-bg-color)] p-4 rounded-lg shadow-md">
-                        <h3 className="text-lg font-bold mb-3 text-gray-700 dark:text-gray-200 flex items-center gap-2">
-                             <SearchIcon className="w-5 h-5" /> Tìm vé khác
-                        </h3>
-                        <CompactSearchForm onSearch={onSearch} initialParams={searchParamsForCompactForm} />
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-// --- NEW FARE SELECTION SUB-COMPONENTS ---
-
-const SelectedFareDisplay: React.FC<{
-    legTitle: string;
-    selectedOption: BookingOption | null;
-    onChangeClick: () => void;
-}> = ({ legTitle, selectedOption, onChangeClick }) => {
-    if (!selectedOption) {
-        return (
-            <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg animate-pulse h-24"></div>
-        );
-    }
-    const { option_title, price, baggage_prices, airline_logos } = selectedOption.together;
-    const primaryBaggage = baggage_prices.find(b => b.toLowerCase().includes('xách tay')) || baggage_prices[0] || 'Thông tin có trong chi tiết';
-
-    return (
-        <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
-            <h4 className="font-bold text-gray-600 dark:text-gray-400 mb-3">{legTitle}</h4>
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                {airline_logos[0] && <img src={airline_logos[0]} alt="airline logo" className="h-10 w-10 object-contain flex-shrink-0" />}
-                <div className="flex-grow">
-                    <p className="font-bold text-lg text-[var(--text-color)]">{option_title}</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">{primaryBaggage}</p>
-                </div>
-                <div className="flex-shrink-0 text-left sm:text-right">
-                    <p className="font-bold text-xl text-red-600">{formatCurrency(price * USD_VND_RATE)}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">/ khách</p>
-                </div>
-                <button onClick={onChangeClick} className="w-full sm:w-auto flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-sm">
-                    <PencilIcon className="w-4 h-4" />
-                    Thay đổi
-                </button>
-            </div>
-        </div>
-    );
-};
-
-const FareSelectionModal: React.FC<{
-    isOpen: boolean;
-    onClose: () => void;
-    options: BookingOption[];
-    selectedOption: BookingOption | null;
-    onSelect: (option: BookingOption) => void;
-    title: string;
-}> = ({ isOpen, onClose, options, selectedOption, onSelect, title }) => {
-    if (!isOpen) return null;
-    const [tempSelected, setTempSelected] = useState(selectedOption);
-
-    const handleConfirm = () => {
-        if (tempSelected) {
-            onSelect(tempSelected);
-        }
-        onClose();
-    };
-
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4" onClick={onClose}>
-            <div className="bg-[var(--card-bg-color)] rounded-lg shadow-xl w-full max-w-2xl transform transition-all flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                <div className="flex justify-between items-center p-4 border-b border-[var(--border-color)] flex-shrink-0">
-                    <h2 className="text-xl font-bold">{title}</h2>
-                    <button onClick={onClose} className="p-1 rounded-full text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700">
-                        <CloseIcon />
-                    </button>
-                </div>
-                <div className="p-6 space-y-4 overflow-y-auto">
-                    {options.map((option, index) => {
-                         const isSelected = tempSelected === option;
-                         return (
-                            <div key={index} 
-                                 onClick={() => setTempSelected(option)}
-                                 className={`p-4 border rounded-lg cursor-pointer transition-all duration-300 ${isSelected ? 'border-red-500 bg-red-50 dark:bg-red-900/20 ring-1 ring-red-300' : 'border-gray-200 dark:border-gray-600 hover:border-red-400 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>
-                                <div className="flex items-start gap-4">
-                                    <input type="radio" name="modal-booking-option" checked={isSelected} readOnly className="h-5 w-5 text-red-600 border-gray-300 focus:ring-red-500 flex-shrink-0 mt-1" />
-                                    <div className="flex-grow">
-                                        <div className="flex justify-between items-start">
-                                            <div>
-                                                <h4 className="font-bold text-lg text-[var(--text-color)]">{option.together.option_title}</h4>
-                                                <ul className="mt-2 text-sm text-gray-700 dark:text-gray-300 space-y-1">
-                                                    {option.together.baggage_prices.map((item, i) => (
-                                                        <li key={i} className="flex items-center"><BriefcaseIcon className="w-4 h-4 mr-2 text-gray-500"/>{item}</li>
-                                                    ))}
-                                                </ul>
-                                            </div>
-                                            <div className="text-right flex-shrink-0 ml-4">
-                                                <p className="font-bold text-lg text-red-600">{formatCurrency(option.together.price * USD_VND_RATE)}</p>
-                                                <p className="text-xs text-gray-500 dark:text-gray-400">/ khách</p>
-                                            </div>
-                                        </div>
-                                         <div className="mt-3 pt-3 border-t border-dashed border-gray-300 dark:border-gray-600">
-                                            <h5 className="font-semibold text-sm text-gray-600 dark:text-gray-400">Điều kiện vé:</h5>
-                                            <ul className="list-disc list-inside text-sm text-gray-700 dark:text-gray-300 space-y-1 mt-1">
-                                                {option.together.extensions.map((cond, i) => <li key={i}>{cond}</li>)}
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                         );
-                    })}
-                </div>
-                 <div className="p-4 border-t border-[var(--border-color)] text-right flex-shrink-0">
-                    <button onClick={handleConfirm} className="bg-red-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-red-700 transition-colors">
-                        Xác nhận
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-
 // --- MAIN COMPONENT ---
 
 interface CheckoutPageProps {
@@ -767,15 +507,17 @@ const CheckoutPage: React.FC<CheckoutPageProps> = (props) => {
     
     const totalPricedPassengers = passengers.adults + passengers.children;
     const [passengerAncillaries, setPassengerAncillaries] = useState<PassengerAncillaries[]>(() => Array(totalPricedPassengers).fill({}));
+    const [feeConfig, setFeeConfig] = useState<AdminFeeConfig | null>(null);
+
+    useEffect(() => {
+        adminService.getFeeConfig().then(setFeeConfig);
+    }, []);
     
-    // Construct SearchParams from current flight for pre-filling the CompactSearchForm
     const currentSearchParams = useMemo((): SearchParams | null => {
         if (!flight || !flight.flights || flight.flights.length === 0) return null;
         
         const firstLeg = flight.flights[0];
         const isRoundTrip = flight.type.toLowerCase().includes('round');
-        // Note: return_date calculation is approximate here as we don't have the exact return query.
-        // We can assume a standard gap or just leave it for the user to pick.
         
         return {
             departure_id: firstLeg.departure_airport.id,
@@ -791,11 +533,57 @@ const CheckoutPage: React.FC<CheckoutPageProps> = (props) => {
       setPassengerAncillaries(Array(totalPricedPassengers).fill({}));
     }, [totalPricedPassengers]);
 
+    const priceData = useMemo(() => {
+        const pricedPassengers = passengers.adults + passengers.children;
+        if (!selectedOutboundOption || pricedPassengers === 0) {
+            return { baseTotal: 0, tax: 0, serviceFee: 0, ancillaryCost: 0, finalTotal: 0 };
+        }
+
+        const outboundFareUSD = selectedOutboundOption.together.price;
+        const inboundFareUSD = (flight.type.toLowerCase().includes('round') && selectedInboundOption) 
+            ? selectedInboundOption.together.price 
+            : 0;
+        
+        const currentAncillaryCost = passengerAncillaries.reduce((total, p) => {
+            return total + (p.outboundBaggage?.price || 0) + (p.inboundBaggage?.price || 0);
+        }, 0);
+
+        const currentBaseTotal = (outboundFareUSD + inboundFareUSD) * USD_VND_RATE * pricedPassengers;
+
+        if (!feeConfig) {
+             const defaultTax = currentBaseTotal * 0.1;
+             return { baseTotal: currentBaseTotal, tax: defaultTax, serviceFee: 0, ancillaryCost: currentAncillaryCost, finalTotal: currentBaseTotal + defaultTax + currentAncillaryCost };
+        }
+
+        const primaryAirline = flight.flights[0]?.airline;
+        const departureAirport = flight.flights[0]?.departure_airport.id;
+        const arrivalAirport = flight.flights[flight.flights.length - 1]?.arrival_airport.id;
+        
+        const resolvedConfig = adminService.resolveFee(feeConfig, primaryAirline, departureAirport, arrivalAirport);
+
+        let calculatedTax = 0;
+        if (resolvedConfig.tax_type === 'percent') {
+            calculatedTax = currentBaseTotal * (resolvedConfig.tax_value / 100);
+        } else {
+            calculatedTax = resolvedConfig.tax_value * pricedPassengers;
+        }
+
+        let calculatedServiceFee = 0;
+        if (resolvedConfig.service_type === 'percent') {
+            calculatedServiceFee = currentBaseTotal * (resolvedConfig.service_value / 100);
+        } else {
+            calculatedServiceFee = resolvedConfig.service_value * pricedPassengers;
+        }
+
+        const currentFinalTotal = currentBaseTotal + calculatedTax + calculatedServiceFee + currentAncillaryCost;
+        
+        return { baseTotal: currentBaseTotal, tax: calculatedTax, serviceFee: calculatedServiceFee, ancillaryCost: currentAncillaryCost, finalTotal: currentFinalTotal };
+        
+    }, [flight, passengers, selectedOutboundOption, selectedInboundOption, feeConfig, passengerAncillaries]);
+
+
     const handleFormSubmit = (formData: Pick<BookingData, 'passengers' | 'contact'>) => {
-        // Create a summary of baggage for backend compatibility
         const baggageSummary: SelectedAncillaries = {};
-        let totalOutboundPrice = 0;
-        let totalInboundPrice = 0;
         
         const outboundSelections = passengerAncillaries.map(p => p.outboundBaggage?.name).filter(Boolean);
         if (outboundSelections.length > 0) {
@@ -818,6 +606,8 @@ const CheckoutPage: React.FC<CheckoutPageProps> = (props) => {
         const fullBookingData = {
             ...formData,
             ancillaries: baggageSummary,
+            // CRITICAL FIX: Pass the calculated total amount here
+            total_amount: priceData.finalTotal 
         };
         onConfirmBooking(fullBookingData);
     };
@@ -985,11 +775,9 @@ const CheckoutPage: React.FC<CheckoutPageProps> = (props) => {
                 <div className="lg:col-span-1 space-y-6 lg:sticky lg:top-24">
                     <DetailedFlightSummary details={bookingDetails} selectedOutboundOption={selectedOutboundOption} selectedInboundOption={selectedInboundOption} />
                     <PriceDetails 
-                        flight={flight} 
+                        priceData={priceData}
                         passengers={passengers} 
-                        selectedOutboundOption={selectedOutboundOption} 
-                        selectedInboundOption={selectedInboundOption}
-                        passengerAncillaries={passengerAncillaries}
+                        feeConfig={feeConfig}
                     />
                     <div className="bg-[var(--card-bg-color)] p-4 rounded-lg shadow-md">
                         <h3 className="text-lg font-bold mb-3 text-gray-700 dark:text-gray-200 flex items-center gap-2">
@@ -1035,3 +823,183 @@ const CheckoutPage: React.FC<CheckoutPageProps> = (props) => {
 };
 
 export default CheckoutPage;
+
+// ... SelectedFareDisplay/FareSelectionModal/BookingConfirmation sub-components assumed unchanged ...
+const SelectedFareDisplay: React.FC<{
+    legTitle: string;
+    selectedOption: BookingOption | null;
+    onChangeClick: () => void;
+}> = ({ legTitle, selectedOption, onChangeClick }) => {
+    if (!selectedOption) {
+        return (
+            <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg animate-pulse h-24"></div>
+        );
+    }
+    const { option_title, price, baggage_prices, airline_logos } = selectedOption.together;
+    const primaryBaggage = baggage_prices.find(b => b.toLowerCase().includes('xách tay')) || baggage_prices[0] || 'Thông tin có trong chi tiết';
+
+    return (
+        <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+            <h4 className="font-bold text-gray-600 dark:text-gray-400 mb-3">{legTitle}</h4>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                {airline_logos[0] && <img src={airline_logos[0]} alt="airline logo" className="h-10 w-10 object-contain flex-shrink-0" />}
+                <div className="flex-grow">
+                    <p className="font-bold text-lg text-[var(--text-color)]">{option_title}</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-300">{primaryBaggage}</p>
+                </div>
+                <div className="flex-shrink-0 text-left sm:text-right">
+                    <p className="font-bold text-xl text-red-600">{formatCurrency(price * USD_VND_RATE)}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">/ khách</p>
+                </div>
+                <button onClick={onChangeClick} className="w-full sm:w-auto flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-sm">
+                    <PencilIcon className="w-4 h-4" />
+                    Thay đổi
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const FareSelectionModal: React.FC<{
+    isOpen: boolean;
+    onClose: () => void;
+    options: BookingOption[];
+    selectedOption: BookingOption | null;
+    onSelect: (option: BookingOption) => void;
+    title: string;
+}> = ({ isOpen, onClose, options, selectedOption, onSelect, title }) => {
+    if (!isOpen) return null;
+    const [tempSelected, setTempSelected] = useState(selectedOption);
+
+    const handleConfirm = () => {
+        if (tempSelected) {
+            onSelect(tempSelected);
+        }
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4" onClick={onClose}>
+            <div className="bg-[var(--card-bg-color)] rounded-lg shadow-xl w-full max-w-2xl transform transition-all flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center p-4 border-b border-[var(--border-color)] flex-shrink-0">
+                    <h2 className="text-xl font-bold">{title}</h2>
+                    <button onClick={onClose} className="p-1 rounded-full text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700">
+                        <CloseIcon />
+                    </button>
+                </div>
+                <div className="p-6 space-y-4 overflow-y-auto">
+                    {options.map((option, index) => {
+                         const isSelected = tempSelected === option;
+                         return (
+                            <div key={index} 
+                                 onClick={() => setTempSelected(option)}
+                                 className={`p-4 border rounded-lg cursor-pointer transition-all duration-300 ${isSelected ? 'border-red-500 bg-red-50 dark:bg-red-900/20 ring-1 ring-red-300' : 'border-gray-200 dark:border-gray-600 hover:border-red-400 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>
+                                <div className="flex items-start gap-4">
+                                    <input type="radio" name="modal-booking-option" checked={isSelected} readOnly className="h-5 w-5 text-red-600 border-gray-300 focus:ring-red-500 flex-shrink-0 mt-1" />
+                                    <div className="flex-grow">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <h4 className="font-bold text-lg text-[var(--text-color)]">{option.together.option_title}</h4>
+                                                <ul className="mt-2 text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                                                    {option.together.baggage_prices.map((item, i) => (
+                                                        <li key={i} className="flex items-center"><BriefcaseIcon className="w-4 h-4 mr-2 text-gray-500"/>{item}</li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                            <div className="text-right flex-shrink-0 ml-4">
+                                                <p className="font-bold text-lg text-red-600">{formatCurrency(option.together.price * USD_VND_RATE)}</p>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400">/ khách</p>
+                                            </div>
+                                        </div>
+                                         <div className="mt-3 pt-3 border-t border-dashed border-gray-300 dark:border-gray-600">
+                                            <h5 className="font-semibold text-sm text-gray-600 dark:text-gray-400">Điều kiện vé:</h5>
+                                            <ul className="list-disc list-inside text-sm text-gray-700 dark:text-gray-300 space-y-1 mt-1">
+                                                {option.together.extensions.map((cond, i) => <li key={i}>{cond}</li>)}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                         );
+                    })}
+                </div>
+                 <div className="p-4 border-t border-[var(--border-color)] text-right flex-shrink-0">
+                    <button onClick={handleConfirm} className="bg-red-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-red-700 transition-colors">
+                        Xác nhận
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const BookingConfirmation: React.FC<{
+    onNewSearch: () => void;
+    bookingData: BookingData;
+    onShowTicket: () => void;
+    searchParamsForCompactForm: SearchParams | null;
+    onSearch: (params: SearchParams) => void;
+}> = ({ onNewSearch, bookingData, onShowTicket, searchParamsForCompactForm, onSearch }) => {
+
+    return (
+        <div className="container mx-auto px-4 py-8 max-w-7xl">
+             <BookingSteps currentStep="complete" />
+             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+                <div className="lg:col-span-2 max-w-4xl mx-auto bg-[var(--card-bg-color)] p-6 sm:p-8 rounded-lg shadow-lg w-full">
+                    <div className="text-center border-b border-[var(--border-color)] pb-4 mb-6">
+                        <CheckCircleIcon className="mx-auto h-16 w-16 text-green-500" />
+                        <h2 className="mt-4 text-3xl font-bold text-[var(--text-color)]">Yêu cầu đặt vé đã được gửi!</h2>
+                        <p className="mt-2 text-gray-600 dark:text-gray-300">Cảm ơn <span className="font-semibold">{bookingData.contact.fullName}</span>, chúng tôi đã nhận được yêu cầu của bạn.</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-center sm:text-left mb-6 bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-[var(--border-color)]">
+                        <div><p className="text-sm text-gray-500 dark:text-gray-400">Mã đơn hàng</p><p className="font-bold text-xl text-red-600 tracking-wider">{bookingData.id}</p></div>
+                        <div className="sm:text-right"><p className="text-sm text-gray-500 dark:text-gray-400">Mã đặt chỗ (PNR)</p><p className="font-bold text-xl text-red-600 tracking-wider">{bookingData.pnr}</p></div>
+                    </div>
+
+                    <div className="space-y-8">
+                        <DetailedFlightSummary 
+                            details={bookingData.bookingDetails} 
+                            selectedOutboundOption={bookingData.selectedOutboundOption} 
+                            selectedInboundOption={bookingData.selectedInboundOption} 
+                            ancillaries={bookingData.ancillaries}
+                        />
+                    </div>
+
+                    <div className="mt-8 p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg text-orange-800 dark:text-orange-200 flex items-start gap-3">
+                        <InfoIcon className="w-6 h-6 flex-shrink-0 mt-0.5" />
+                        <div>
+                             <h4 className="font-bold">Lưu ý quan trọng về Giá vé & Xuất vé</h4>
+                             <p className="text-sm mt-1">
+                                Giá vé và tình trạng chỗ có thể thay đổi tùy thuộc vào thời điểm xuất vé thực tế của Hãng hàng không. 
+                                Quý khách vui lòng hoàn tất thanh toán sớm để đảm bảo giữ được mức giá và hành trình đã chọn.
+                                Vé chỉ được coi là xuất thành công khi có xác nhận Số vé điện tử từ nhân viên phòng vé.
+                             </p>
+                        </div>
+                    </div>
+
+                    <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg text-center">
+                        <h4 className="font-semibold text-blue-800 dark:text-blue-300">Bước tiếp theo là gì?</h4>
+                        <p className="text-sm text-blue-700 dark:text-blue-400 mt-1">Nhân viên sẽ sớm kiểm tra tình trạng vé và liên hệ với bạn qua SĐT <strong className="whitespace-nowrap">{bookingData.contact.phone}</strong> hoặc email <strong className="whitespace-nowrap">{bookingData.contact.email}</strong> để xác nhận và hướng dẫn thanh toán.</p>
+                    </div>
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-4 border-t border-[var(--border-color)] pt-6 mt-6">
+                        <button onClick={onNewSearch} className="w-full sm:w-auto bg-gray-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-gray-800 transition-colors duration-300">
+                            Tìm kiếm mới
+                        </button>
+                        <button onClick={onShowTicket} className="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-red-700 transition-colors duration-300">
+                            <DownloadIcon />
+                            Xem & Tải vé điện tử
+                        </button>
+                    </div>
+                </div>
+                 <div className="lg:col-span-1 space-y-6">
+                     <div className="bg-[var(--card-bg-color)] p-4 rounded-lg shadow-md">
+                        <h3 className="text-lg font-bold mb-3 text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                             <SearchIcon className="w-5 h-5" /> Tìm vé khác
+                        </h3>
+                        <CompactSearchForm onSearch={onSearch} initialParams={searchParamsForCompactForm} />
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

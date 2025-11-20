@@ -128,6 +128,37 @@ export const getAllUsers = async (): Promise<Omit<User, 'password'>[]> => {
     }
 };
 
+const safeParseBooking = (b: any): BookingData => {
+    const safeParse = (val: any, defaultVal: any) => {
+        if (val === null || val === undefined) return defaultVal;
+        if (typeof val === 'string') {
+            try { return JSON.parse(val) || defaultVal; } catch { return defaultVal; }
+        }
+        return val;
+    };
+    
+    const ensureObject = (val: any, defaultVal: any) => {
+        const parsed = safeParse(val, defaultVal);
+        if (Array.isArray(parsed) && parsed.length === 0) return defaultVal;
+        return parsed;
+    };
+
+    return {
+        ...b,
+        userId: b.user_id || b.userId,
+        total_amount: b.total_amount ? parseFloat(b.total_amount) : 0,
+        payment_info: safeParse(b.payment_info, {}),
+        passengers: Array.isArray(b.passengers) ? b.passengers : safeParse(b.passengers, []),
+        contact: ensureObject(b.contact, {}),
+        flight: ensureObject(b.flight, { price_net: 0, flights: [] }),
+        bookingDetails: ensureObject(b.bookingDetails, { selected_flights: [] }),
+        selectedOutboundOption: ensureObject(b.selectedOutboundOption, null),
+        selectedInboundOption: ensureObject(b.selectedInboundOption, null),
+        ancillaries: ensureObject(b.ancillaries, {})
+    };
+};
+
+
 export const getMyBookings = async (userId: number | string): Promise<BookingData[]> => {
     try {
         const response = await fetch(`${DB_API_URL}?action=get_my_bookings`, {
@@ -139,10 +170,10 @@ export const getMyBookings = async (userId: number | string): Promise<BookingDat
              throw new Error(`Server error: ${response.statusText}`);
         }
         const data = await response.json();
-        return Array.isArray(data) ? data.map((b: any) => ({
-            ...b,
-            payment_info: typeof b.payment_info === 'string' ? JSON.parse(b.payment_info) : b.payment_info
-        })) : [];
+        
+        if (!Array.isArray(data)) return [];
+
+        return data.map(safeParseBooking);
     } catch (error) {
         console.error("Failed to fetch my bookings:", error);
         return [];
@@ -159,7 +190,11 @@ export const getBookingByPnr = async (pnr: string): Promise<BookingData | null> 
         });
         if (!response.ok) return null;
         const result = await response.json();
-        return result.booking || null;
+        
+        if (!result.booking) return null;
+        
+        return safeParseBooking(result.booking);
+
     } catch (error) {
         return null;
     }

@@ -146,7 +146,7 @@ export const createBooking = async (bookingData: BookingData): Promise<{ success
             ...bookingData,
             user_id: bookingData.userId,
             payment_status: 'pending',
-            total_amount: 0, 
+            total_amount: bookingData.total_amount || 0, 
             payment_info: JSON.stringify({}) 
         };
 
@@ -176,11 +176,45 @@ export const getAllBookings = async (): Promise<BookingData[]> => {
             throw new Error(`Server responded with status ${response.status}`);
         }
         const data = await response.json();
-        return Array.isArray(data) ? data.map((b: any) => ({
-            ...b,
-            userId: b.user_id || b.userId,
-            payment_info: typeof b.payment_info === 'string' ? JSON.parse(b.payment_info) : b.payment_info
-        })) : [];
+        
+        if (!Array.isArray(data)) return [];
+
+        return data.map((b: any) => {
+            // HELPER: Safe Parsing to avoid White Screen
+            const safeParse = (val: any, defaultVal: any) => {
+                if (val === null || val === undefined) return defaultVal;
+                if (typeof val === 'string') {
+                    try { 
+                        const parsed = JSON.parse(val);
+                        return parsed || defaultVal;
+                    } catch { 
+                        return defaultVal; 
+                    }
+                }
+                return val;
+            };
+
+            // Ensure objects are objects and not empty arrays (common PHP issue)
+            const ensureObject = (val: any, defaultVal: any) => {
+                const parsed = safeParse(val, defaultVal);
+                if (Array.isArray(parsed) && parsed.length === 0) return defaultVal;
+                return parsed;
+            };
+
+            return {
+                ...b,
+                userId: b.user_id || b.userId,
+                total_amount: b.total_amount ? parseFloat(b.total_amount) : 0,
+                payment_info: safeParse(b.payment_info, {}),
+                passengers: Array.isArray(b.passengers) ? b.passengers : safeParse(b.passengers, []),
+                contact: ensureObject(b.contact, {}),
+                flight: ensureObject(b.flight, { price_net: 0, flights: [] }),
+                bookingDetails: ensureObject(b.bookingDetails, { selected_flights: [] }),
+                selectedOutboundOption: ensureObject(b.selectedOutboundOption, null),
+                selectedInboundOption: ensureObject(b.selectedInboundOption, null),
+                ancillaries: ensureObject(b.ancillaries, {})
+            };
+        });
     } catch (e) {
         console.error("Error fetching bookings from the database:", e);
         return [];
@@ -194,7 +228,8 @@ export const deleteBooking = async (bookingId: string): Promise<{ success: boole
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ bookingId }),
         });
-        return await response.json();
+        const result = await response.json();
+        return result || { success: false, message: 'Không nhận được phản hồi từ server.' };
     } catch (error) {
         return { success: false, message: 'Lỗi kết nối khi xóa đơn hàng.' };
     }
@@ -207,9 +242,11 @@ export const updateBookingStatus = async (bookingId: string, status: string, adm
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ bookingId, status, admin_note }),
         });
-        return await response.json();
+        const result = await response.json();
+        return result || { success: false, message: 'Không nhận được phản hồi từ server.' };
     } catch (error) {
-        return { success: false, message: 'Lỗi kết nối khi cập nhật trạng thái.' };
+        const msg = error instanceof Error ? error.message : 'Lỗi không xác định';
+        return { success: false, message: `Lỗi kết nối: ${msg}` };
     }
 };
 
@@ -226,7 +263,8 @@ export const processPayment = async (bookingId: string, totalAmount: number, pay
                 total_amount: totalAmount
             }),
         });
-        return await response.json();
+        const result = await response.json();
+        return result || { success: false, message: 'Không nhận được phản hồi từ server.' };
     } catch (error) {
         return { success: false, message: 'Lỗi xử lý thanh toán.' };
     }
@@ -273,14 +311,42 @@ export const lookupBooking = async (lookupData: BookingLookupData): Promise<Book
 
 export const updateUser = async (user: User): Promise<{ success: boolean, message: string }> => {
     try {
+         // Map gender back to DB format
+        let genderDB = 'Other';
+        const inputGender = user.gender; 
+        
+        if (inputGender === 'Mr' || inputGender === 'Nam' || inputGender === 'Male') {
+            genderDB = 'Male';
+        } else if (inputGender === 'Mrs' || inputGender === 'Miss' || inputGender === 'Nữ' || inputGender === 'Female') {
+            genderDB = 'Female';
+        }
+
+        // Sanitize optional fields
+        const sanitizeOptional = (str?: string) => {
+            if (!str) return null;
+            const trimmed = str.trim();
+            return trimmed.length > 0 ? trimmed : null;
+        };
+
+        const payload = {
+            ...user,
+            gender: genderDB,
+            dob: sanitizeOptional(user.dob),
+            id_card: sanitizeOptional(user.id_card),
+            address: sanitizeOptional(user.address),
+            nationality: user.nationality || 'Việt Nam'
+        };
+
         const response = await fetch(`${DB_API_URL}?action=admin_update_user`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(user),
+            body: JSON.stringify(payload),
         });
-        return await response.json();
+        const result = await response.json();
+        return result || { success: false, message: 'Server không trả về kết quả.' };
     } catch (error) {
-        return { success: false, message: 'Lỗi kết nối khi cập nhật người dùng.' };
+        const msg = error instanceof Error ? error.message : 'Lỗi không xác định';
+        return { success: false, message: `Lỗi kết nối cập nhật user: ${msg}` };
     }
 };
 
